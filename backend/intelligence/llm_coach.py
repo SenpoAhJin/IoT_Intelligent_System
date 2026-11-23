@@ -1,7 +1,7 @@
 """Optional LLM-based coaching using Anthropic API."""
 
 import os
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 
 def generate_llm_feedback(player_stats: Dict, recent_runs: List[Dict]) -> Optional[str]:

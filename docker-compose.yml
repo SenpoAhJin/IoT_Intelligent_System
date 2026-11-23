@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  mqtt:
+    image: eclipse-mosquitto:2.0
+    container_name: aquabuzz-mqtt
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+    restart: unless-stopped
+    networks:
+      - aquabuzz-net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: aquabuzz-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:////app/data/aquabuzz.db
+      - MQTT_BROKER_HOST=mqtt
+      - MQTT_BROKER_PORT=1883
+      - CORS_ORIGINS=http://localhost:8000,http://localhost:3000
+    volumes:
+      - ./backend:/app
+      - backend-data:/app/data
+    depends_on:
+      - mqtt
+    restart: unless-stopped
+    networks:
+      - aquabuzz-net
+
+  dashboard:
+    image: nginx:alpine
+    container_name: aquabuzz-dashboard
+    ports:
+      - "3000:80"
+    volumes:
+      - ./dashboard:/usr/share/nginx/html:ro
+    restart: unless-stopped
+    networks:
+      - aquabuzz-net
+
+volumes:
+  backend-data:
+
+networks:
+  aquabuzz-net:
+    driver: bridge

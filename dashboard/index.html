@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AquaBuzz Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f7fa;
+            color: #2c3e50;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            color: #3498db;
+        }
+        
+        .subtitle {
+            color: #7f8c8d;
+            margin-bottom: 30px;
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .card h2 {
+            font-size: 1.3em;
+            margin-bottom: 15px;
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        
+        .stat {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #ecf0f1;
+        }
+        
+        .stat:last-child {
+            border-bottom: none;
+        }
+        
+        .stat-label {
+            color: #7f8c8d;
+            font-weight: 500;
+        }
+        
+        .stat-value {
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-online {
+            background: #2ecc71;
+        }
+        
+        .status-offline {
+            background: #e74c3c;
+        }
+        
+        .leaderboard-entry {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px;
+            margin-bottom: 8px;
+            background: #ecf0f1;
+            border-radius: 4px;
+        }
+        
+        .leaderboard-entry:nth-child(1) {
+            background: #f1c40f;
+            font-weight: bold;
+        }
+        
+        .leaderboard-entry:nth-child(2) {
+            background: #bdc3c7;
+        }
+        
+        .leaderboard-entry:nth-child(3) {
+            background: #e67e22;
+            color: white;
+        }
+        
+        .run-item {
+            padding: 10px;
+            margin-bottom: 8px;
+            background: #ecf0f1;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: bold;
+            margin-left: 8px;
+        }
+        
+        .badge-expert {
+            background: #9b59b6;
+            color: white;
+        }
+        
+        .badge-intermediate {
+            background: #3498db;
+            color: white;
+        }
+        
+        .badge-beginner {
+            background: #95a5a6;
+            color: white;
+        }
+        
+        .alert {
+            padding: 12px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+        }
+        
+        .refresh-btn {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1em;
+            margin-bottom: 20px;
+        }
+        
+        .refresh-btn:hover {
+            background: #2980b9;
+        }
+        
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+            
+            h1 {
+                font-size: 1.8em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎮 AquaBuzz Dashboard</h1>
+        <p class="subtitle">Intelligent buzz-wire maze monitoring</p>
+        
+        <button class="refresh-btn" onclick="loadData()">🔄 Refresh Data</button>
+        
+        <div class="alert" id="status-alert" style="display: none;"></div>
+        
+        <div class="grid">
+            <div class="card">
+                <h2>System Health</h2>
+                <div id="health-info">Loading...</div>
+            </div>
+            
+            <div class="card">
+                <h2>🏆 Leaderboard</h2>
+                <div id="leaderboard">Loading...</div>
+            </div>
+            
+            <div class="card">
+                <h2>Recent Runs</h2>
+                <div id="recent-runs">Loading...</div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>Players</h2>
+            <div id="players-list">Loading...</div>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = 'http://localhost:8000/api';
+        
+        async function loadData() {
+            await Promise.all([
+                loadHealth(),
+                loadLeaderboard(),
+                loadRecentRuns(),
+                loadPlayers()
+            ]);
+        }
+        
+        async function loadHealth() {
+            try {
+                const res = await fetch(`${API_BASE}/health`);
+                const data = await res.json();
+                
+                const mqttStatus = data.mqtt_connected ? 
+                    '<span class="status-indicator status-online"></span>Connected' :
+                    '<span class="status-indicator status-offline"></span>Disconnected';
+                
+                document.getElementById('health-info').innerHTML = `
+                    <div class="stat">
+                        <span class="stat-label">Status</span>
+                        <span class="stat-value">${data.status}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">MQTT</span>
+                        <span class="stat-value">${mqttStatus}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Total Runs</span>
+                        <span class="stat-value">${data.total_runs}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Total Players</span>
+                        <span class="stat-value">${data.total_players}</span>
+                    </div>
+                `;
+            } catch (err) {
+                document.getElementById('health-info').innerHTML = 
+                    '<div class="alert">❌ Could not connect to backend</div>';
+            }
+        }
+        
+        async function loadLeaderboard() {
+            try {
+                const res = await fetch(`${API_BASE}/leaderboard?limit=5`);
+                const data = await res.json();
+                
+                if (data.length === 0) {
+                    document.getElementById('leaderboard').innerHTML = 
+                        '<p style="color: #7f8c8d;">No completed runs yet</p>';
+                    return;
+                }
+                
+                const html = data.map(entry => `
+                    <div class="leaderboard-entry">
+                        <span>${entry.rank}. ${entry.player_id}</span>
+                        <span>${(entry.score / 1000).toFixed(1)}s</span>
+                    </div>
+                `).join('');
+                
+                document.getElementById('leaderboard').innerHTML = html;
+            } catch (err) {
+                document.getElementById('leaderboard').innerHTML = '<p>Error loading leaderboard</p>';
+            }
+        }
+        
+        async function loadRecentRuns() {
+            try {
+                const res = await fetch(`${API_BASE}/runs?limit=5`);
+                const data = await res.json();
+                
+                if (data.length === 0) {
+                    document.getElementById('recent-runs').innerHTML = 
+                        '<p style="color: #7f8c8d;">No runs yet</p>';
+                    return;
+                }
+                
+                const html = data.map(run => `
+                    <div class="run-item">
+                        <strong>${run.player_id}</strong> - 
+                        ${run.hits} hits, 
+                        ${(run.duration_ms / 1000).toFixed(1)}s
+                        ${run.score ? `(score: ${(run.score / 1000).toFixed(1)}s)` : ''}
+                    </div>
+                `).join('');
+                
+                document.getElementById('recent-runs').innerHTML = html;
+            } catch (err) {
+                document.getElementById('recent-runs').innerHTML = '<p>Error loading runs</p>';
+            }
+        }
+        
+        async function loadPlayers() {
+            try {
+                const res = await fetch(`${API_BASE}/players`);
+                const data = await res.json();
+                
+                if (data.length === 0) {
+                    document.getElementById('players-list').innerHTML = 
+                        '<p style="color: #7f8c8d;">No players yet</p>';
+                    return;
+                }
+                
+                const html = data.map(player => {
+                    const badgeClass = player.skill_level ? 
+                        `badge badge-${player.skill_level}` : '';
+                    const skillBadge = player.skill_level ?
+                        `<span class="${badgeClass}">${player.skill_level}</span>` : '';
+                    
+                    return `
+                        <div class="stat">
+                            <span class="stat-label">
+                                ${player.id} ${skillBadge}
+                            </span>
+                            <span class="stat-value">
+                                ${player.total_runs} runs
+                                ${player.best_score ? ` | Best: ${(player.best_score / 1000).toFixed(1)}s` : ''}
+                            </span>
+                        </div>
+                    `;
+                }).join('');
+                
+                document.getElementById('players-list').innerHTML = html;
+            } catch (err) {
+                document.getElementById('players-list').innerHTML = '<p>Error loading players</p>';
+            }
+        }
+        
+        // Auto-refresh every 5 seconds
+        setInterval(loadData, 5000);
+        
+        // Initial load
+        loadData();
+    </script>
+</body>
+</html>
