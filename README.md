@@ -31,19 +31,82 @@ AquaBuzz is a physical buzz-wire maze game enhanced with IoT intelligence. Playe
 
 ### Prerequisites
 
-- Docker and Docker Compose
-- Python 3.11+ (for simulator and local development)
+- Python 3.11+ with virtual environment
+- Mosquitto MQTT broker installed
 - Arduino IDE or arduino-cli (for firmware flashing)
 - ESP32 board support in Arduino
 
-### 1. Start the Backend Stack
+### Windows Quick Start with `rise` Command
 
+**First-time setup:**
+```powershell
+# 1. Install Python dependencies
+.\\.venv\Scripts\python -m pip install -r backend\requirements.txt
+
+# 2. Install rise command
+.\scripts\install-rise-command.ps1
+
+# 3. Reload PowerShell profile
+. $PROFILE
+```
+
+**Daily usage:**
+```powershell
+# Start everything (MQTT, Backend, Dashboard)
+rise
+
+# Stop everything
+rise-stop
+```
+
+That's it! The `rise` command automatically:
+- ✅ Starts Mosquitto MQTT broker
+- ✅ Starts FastAPI backend
+- ✅ Starts dashboard server (with smart port selection)
+- ✅ Opens browser with dashboard and API docs
+- ✅ Verifies all services are healthy
+
+**For detailed documentation:** See [RISE_QUICK_START.md](RISE_QUICK_START.md)
+
+### Manual Start (Alternative)
+
+If you prefer manual control:
+
+**Terminal 1 - Mosquitto:**
+```powershell
+cd "C:\Program Files\mosquitto"
+.\mosquitto.exe -c "c:\path\to\project\mosquitto.conf" -v
+```
+
+**Terminal 2 - Backend:**
 ```bash
-# Start Mosquitto MQTT broker, backend API, and dashboard
-docker compose up -d
+cd backend
+..\\.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
 
-# Check services are running
-docker compose ps
+**Terminal 3 - Dashboard:**
+```bash
+cd dashboard
+..\\.venv\Scripts\python -m http.server 3000 --bind 127.0.0.1
+```
+
+**URLs:**
+- Backend API: http://localhost:8000
+- Dashboard: http://localhost:3000
+- API Docs: http://localhost:8000/docs
+
+## 📚 Documentation
+
+### Startup Automation
+- **[RISE_QUICK_START.md](RISE_QUICK_START.md)** - Get started with `rise` command in 2 minutes
+- **[RISE_COMMAND_GUIDE.md](RISE_COMMAND_GUIDE.md)** - Complete guide to startup automation
+- **[RISE_IMPLEMENTATION_REPORT.md](RISE_IMPLEMENTATION_REPORT.md)** - Technical implementation details
+
+### Project Documentation
+- **[docs/architecture.md](docs/architecture.md)** - System architecture and components
+- **[docs/wiring.md](docs/wiring.md)** - Hardware wiring guide
+- **[docs/mqtt-topics.md](docs/mqtt-topics.md)** - MQTT protocol specification
+- **[docs/troubleshooting.md](docs/troubleshooting.md)** - Common issues and solutions
 ```
 
 Backend API: http://localhost:8000  

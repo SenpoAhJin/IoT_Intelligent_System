@@ -90,8 +90,10 @@ struct MQTTMessage {
 // ==================== Core Game Logic (preserved from v6) ====================
 
 void driveBuzzerNow() {
-  mazeRaw = !digitalRead(PIN_MAZE);
-  digitalWrite(PIN_BUZZER, mazeRaw ? HIGH : LOW);
+  // Read sensor directly for immediate buzzer response
+  // Do NOT modify mazeRaw - that's used by updateContacts() for debouncing
+  bool currentContact = !digitalRead(PIN_MAZE);
+  digitalWrite(PIN_BUZZER, currentContact ? HIGH : LOW);
 }
 
 void queuePrint(const char* format, ...) {
@@ -168,10 +170,8 @@ void onMazePressed() {
       state = RUNNING;
       finishReleased = !finishPressed;
       
+      // Serial output ONLY - gateway handles MQTT publishing
       queuePrint("{\"run\":%d,\"event\":\"run_start\",\"t_ms\":0}", runNo);
-      queueMQTT("aquabuzz/" DEVICE_ID "/events",
-                "{\"device_id\":\"" DEVICE_ID "\",\"run_uid\":\"%s\",\"run_no\":%d,\"player_id\":\"%s\",\"event\":\"run_start\",\"t_ms\":0}",
-                runUid.c_str(), runNo, playerId.c_str());
     }
   } else if (state == RUNNING) {
     currentHitStartMs = now;
@@ -179,11 +179,9 @@ void onMazePressed() {
     hits[hitCount - 1].startMs = now - runStartMs;
     hits[hitCount - 1].durationMs = 0;
     
+    // Serial output ONLY
     queuePrint("{\"run\":%d,\"event\":\"hit_start\",\"hit\":%d,\"t_ms\":%lu}",
                runNo, hitCount, now - runStartMs);
-    queueMQTT("aquabuzz/" DEVICE_ID "/events",
-              "{\"device_id\":\"" DEVICE_ID "\",\"run_uid\":\"%s\",\"run_no\":%d,\"player_id\":\"%s\",\"event\":\"hit_start\",\"hit\":%d,\"t_ms\":%lu}",
-              runUid.c_str(), runNo, playerId.c_str(), hitCount, now - runStartMs);
   }
 }
 
@@ -193,11 +191,9 @@ void onMazeReleased() {
     unsigned long duration = now - currentHitStartMs;
     hits[hitCount - 1].durationMs = duration;
     
+    // Serial output ONLY
     queuePrint("{\"run\":%d,\"event\":\"hit_end\",\"hit\":%d,\"t_ms\":%lu,\"dur_ms\":%lu}",
                runNo, hitCount, now - runStartMs, duration);
-    queueMQTT("aquabuzz/" DEVICE_ID "/events",
-              "{\"device_id\":\"" DEVICE_ID "\",\"run_uid\":\"%s\",\"run_no\":%d,\"player_id\":\"%s\",\"event\":\"hit_end\",\"hit\":%d,\"t_ms\":%lu,\"dur_ms\":%lu}",
-              runUid.c_str(), runNo, playerId.c_str(), hitCount, now - runStartMs, duration);
     
     currentHitStartMs = 0;
   }
@@ -206,11 +202,24 @@ void onMazeReleased() {
 void onFinishPressed() {
   if (state == RUNNING) {
     unsigned long now = millis();
+    
+    // CRITICAL FIX: Close active hit before calculating final stats
+    if (currentHitStartMs > 0) {
+      unsigned long duration = now - currentHitStartMs;
+      hits[hitCount - 1].durationMs = duration;
+      
+      // Serial output ONLY
+      queuePrint("{\"run\":%d,\"event\":\"hit_end\",\"hit\":%d,\"t_ms\":%lu,\"dur_ms\":%lu}",
+                 runNo, hitCount, now - runStartMs, duration);
+      
+      currentHitStartMs = 0;
+    }
+    
     runEndMs = now;
     state = FINISHED;
     finishLockoutUntil = now + LOCKOUT_MS;
     
-    // Calculate stats
+    // Calculate stats AFTER closing active hit
     unsigned long totalTimeMs = runEndMs - runStartMs;
     unsigned long totalContactMs = 0;
     unsigned long longestHitMs = 0;
@@ -226,12 +235,9 @@ void onFinishPressed() {
     int scoredHits = max(0, hitCount - freeHits);
     unsigned long score = totalTimeMs + (scoredHits * hitPenaltyMs);
     
+    // Serial output ONLY
     queuePrint("{\"run\":%d,\"event\":\"run_finish\",\"t_ms\":%lu,\"hits\":%d,\"total_contact_ms\":%lu,\"longest_hit_ms\":%lu,\"hit_penalty_ms\":%lu,\"score\":%lu}",
                runNo, totalTimeMs, hitCount, totalContactMs, longestHitMs, hitPenaltyMs, score);
-    
-    queueMQTT("aquabuzz/" DEVICE_ID "/events",
-              "{\"device_id\":\"" DEVICE_ID "\",\"run_uid\":\"%s\",\"run_no\":%d,\"player_id\":\"%s\",\"event\":\"run_finish\",\"t_ms\":%lu,\"hits\":%d,\"total_contact_ms\":%lu,\"longest_hit_ms\":%lu,\"hit_penalty_ms\":%lu,\"score\":%lu}",
-              runUid.c_str(), runNo, playerId.c_str(), totalTimeMs, hitCount, totalContactMs, longestHitMs, hitPenaltyMs, score);
     
     delay(100);
     state = WAITING;
@@ -244,10 +250,8 @@ void handleSerialCommand() {
     
     if (cmd == 'r') {
       if (state == RUNNING) {
+        // Serial output ONLY
         queuePrint("{\"run\":%d,\"event\":\"run_cancel\",\"t_ms\":%lu}", runNo, millis() - runStartMs);
-        queueMQTT("aquabuzz/" DEVICE_ID "/events",
-                  "{\"device_id\":\"" DEVICE_ID "\",\"run_uid\":\"%s\",\"run_no\":%d,\"player_id\":\"%s\",\"event\":\"run_cancel\",\"t_ms\":%lu}",
-                  runUid.c_str(), runNo, playerId.c_str(), millis() - runStartMs);
         runNo++;  // Increment on cancel
       }
       state = WAITING;

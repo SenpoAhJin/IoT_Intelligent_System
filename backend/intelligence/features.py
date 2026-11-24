@@ -25,52 +25,64 @@ def extract_features(run_data: Dict) -> Dict[str, float]:
     features["score"] = run_data.get("score", duration_ms + hits * 2000)
     
     # Hit timing features
-    if hits > 0 and hit_records:
-        durations = [h.get("duration_ms", 0) for h in hit_records]
-        features["avg_hit_duration_ms"] = np.mean(durations)
-        features["max_hit_duration_ms"] = np.max(durations)
-        features["min_hit_duration_ms"] = np.min(durations)
-        features["std_hit_duration_ms"] = np.std(durations) if len(durations) > 1 else 0
+    if hits > 0 and hit_records and len(hit_records) > 0:
+        durations = [h.get("duration_ms", 0) for h in hit_records if h.get("duration_ms", 0) > 0]
+        
+        if len(durations) > 0:
+            features["avg_hit_duration_ms"] = float(np.mean(durations))
+            features["max_hit_duration_ms"] = float(np.max(durations))
+            features["min_hit_duration_ms"] = float(np.min(durations))
+            features["std_hit_duration_ms"] = float(np.std(durations)) if len(durations) > 1 else 0.0
+        else:
+            features["avg_hit_duration_ms"] = 0.0
+            features["max_hit_duration_ms"] = 0.0
+            features["min_hit_duration_ms"] = 0.0
+            features["std_hit_duration_ms"] = 0.0
         
         # Hit rate
         if duration_ms > 0:
             features["hits_per_second"] = (hits / duration_ms) * 1000
             features["hits_per_minute"] = (hits / duration_ms) * 60000
         else:
-            features["hits_per_second"] = 0
-            features["hits_per_minute"] = 0
+            features["hits_per_second"] = 0.0
+            features["hits_per_minute"] = 0.0
         
         # Time to first hit
-        if hit_records:
-            features["time_to_first_hit_ms"] = hit_records[0].get("start_ms", 0)
+        if hit_records and len(hit_records) > 0:
+            features["time_to_first_hit_ms"] = float(hit_records[0].get("start_ms", 0))
         else:
-            features["time_to_first_hit_ms"] = 0
+            features["time_to_first_hit_ms"] = 0.0
         
         # Hit clustering - check if hits are clustered in time
         if len(hit_records) > 1:
             start_times = [h.get("start_ms", 0) for h in hit_records]
-            gaps = np.diff(sorted(start_times))
-            features["avg_gap_between_hits_ms"] = np.mean(gaps)
-            features["min_gap_between_hits_ms"] = np.min(gaps)
+            start_times_sorted = sorted(start_times)
+            gaps = np.diff(start_times_sorted)
+            if len(gaps) > 0:
+                features["avg_gap_between_hits_ms"] = float(np.mean(gaps))
+                features["min_gap_between_hits_ms"] = float(np.min(gaps))
+            else:
+                features["avg_gap_between_hits_ms"] = 0.0
+                features["min_gap_between_hits_ms"] = 0.0
         else:
-            features["avg_gap_between_hits_ms"] = 0
-            features["min_gap_between_hits_ms"] = 0
+            features["avg_gap_between_hits_ms"] = 0.0
+            features["min_gap_between_hits_ms"] = 0.0
     else:
-        features["avg_hit_duration_ms"] = 0
-        features["max_hit_duration_ms"] = 0
-        features["min_hit_duration_ms"] = 0
-        features["std_hit_duration_ms"] = 0
-        features["hits_per_second"] = 0
-        features["hits_per_minute"] = 0
-        features["time_to_first_hit_ms"] = 0
-        features["avg_gap_between_hits_ms"] = 0
-        features["min_gap_between_hits_ms"] = 0
+        features["avg_hit_duration_ms"] = 0.0
+        features["max_hit_duration_ms"] = 0.0
+        features["min_hit_duration_ms"] = 0.0
+        features["std_hit_duration_ms"] = 0.0
+        features["hits_per_second"] = 0.0
+        features["hits_per_minute"] = 0.0
+        features["time_to_first_hit_ms"] = 0.0
+        features["avg_gap_between_hits_ms"] = 0.0
+        features["min_gap_between_hits_ms"] = 0.0
     
     # Speed metrics
     if duration_ms > 0:
-        features["completion_speed"] = 1000 / duration_ms  # completions per second
+        features["completion_speed"] = 1000.0 / duration_ms  # completions per second
     else:
-        features["completion_speed"] = 0
+        features["completion_speed"] = 0.0
     
     return features
 
