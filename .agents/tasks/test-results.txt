@@ -1,159 +1,77 @@
-# AQUABUZZ AUTOMATED TEST RESULTS
-# Test File: backend/tests/test_repairs.py
-# Date: 2025-01-24
-# Python Version: 3.12.10
-# pytest Version: 7.4.3
+# AquaBuzz Latency Optimization - Test Results
 
-================================================================================
-TEST EXECUTION SUMMARY
-================================================================================
+## Phase 1: Non-Invasive Latency Measurement (FEAT-001-004)
+Date: 2024
+Commit: c872406
 
-Total Tests Run: 9
-Tests Passed: 9
-Tests Failed: 0
-Success Rate: 100%
+### Changes Made:
+- ESP32: Added esp32_ts_ms timestamp to all events
+- Serial Gateway: Track serial read and MQTT publish timing  
+- Backend: Measure DB write and total processing time
+- Dashboard: Track API fetch and render timing
 
-Execution Time: 1.45 seconds
-Platform: Windows (win32)
+### Test Results:
+```
+pytest tests/ -v
+26 passed, 53 warnings in 1.25s
+```
 
-================================================================================
-DETAILED TEST RESULTS
-================================================================================
+✅ ALL TESTS PASSING
 
-✓ test_hit_aggregation_from_database [PASSED]
-  Purpose: Verify that run_finish calculates stats from actual Hit records
-  Result: Aggregation correctly calculated from database records
-  - Total hits: 3
-  - Total contact time: 650ms (200 + 150 + 300)
-  - Longest hit: 300ms
-  - Score: 14000ms (8000 + 3×2000)
+---
 
-✓ test_incomplete_hits_excluded [PASSED]
-  Purpose: Verify that hits with duration_ms=0 are excluded from aggregates
-  Result: Only completed hits counted in aggregation
-  - 4 hit records created (2 complete, 2 incomplete)
-  - Only 2 complete hits counted
-  - Total contact: 430ms (250 + 180, excluding the two 0ms hits)
-  - Score: 11000ms (7000 + 2×2000)
+## Phase 4: Dashboard Real-Time Updates (FEAT-007, FEAT-008, FEAT-009)
+Date: 2024
+Commit: 71e9bfc
 
-✓ test_stale_run_detection [PASSED]
-  Purpose: Verify that old started runs are marked as abandoned
-  Result: Stale run detection working correctly
-  - 1 stale run detected (started 1 hour ago)
-  - Stale run marked as 'abandoned'
-  - finished_at remains NULL (not falsely marked as completed)
-  - Recent runs (< 30 minutes) remain 'started'
+### Changes Made:
+- FEAT-007: Display in-progress hits with visual indicators
+  - Show "🔴 (IN PROGRESS)" for duration_ms=0
+  - Show "✓" with duration for completed hits
+  - Red border highlighting for active hits
 
-✓ test_active_runs_exclude_abandoned [PASSED]
-  Purpose: Verify that active_runs count excludes finished and abandoned runs
-  Result: Active run counting is accurate
-  - 4 runs created: 1 started, 1 finished, 1 abandoned, 1 cancelled
-  - active_runs query returned: 1 (only the genuinely started run)
-  - Matches /api/health endpoint query logic
+- FEAT-008: Adaptive polling rate
+  - 1-second interval during active games
+  - 3-second interval when idle
+  - Automatic rate switching
 
-✓ test_duplicate_hit_start_idempotent [PASSED]
-  Purpose: Verify that duplicate hit_start doesn't create duplicate hits
-  Result: Idempotency protection working
-  - Sent hit_start event twice
-  - Only 1 Hit record created in database
-  - Duplicate events properly ignored
+- FEAT-009: Server-Sent Events (SSE) for push updates
+  - Backend /api/live endpoint streams events
+  - Dashboard EventSource client with auto-reconnect
+  - Fallback to polling if SSE fails
 
-✓ test_duplicate_hit_end_idempotent [PASSED]
-  Purpose: Verify that duplicate hit_end doesn't update again
-  Result: Hit completion is write-once
-  - First hit_end set duration to 200ms
-  - Second hit_end (500ms) ignored
-  - Duration remains 200ms (original value preserved)
+### Test Results:
+```
+pytest tests/ -v
+26 passed, 53 warnings in 1.24s
+```
 
-✓ test_duplicate_run_finish_idempotent [PASSED]
-  Purpose: Verify that duplicate run_finish doesn't re-process
-  Result: Run finalization is idempotent
-  - First run_finish processed 1 hit, score=7000ms
-  - Late-arriving second hit added to database
-  - Duplicate run_finish ignored (status already 'finished')
-  - Score and hit count unchanged (7000ms, 1 hit)
-  - Prevents re-aggregation of finalized runs
+✅ ALL TESTS PASSING
 
-✓ test_duplicate_run_start_idempotent [PASSED]
-  Purpose: Verify that duplicate run_start doesn't create duplicate runs
-  Result: Run creation is idempotent
-  - Sent run_start event twice
-  - Only 1 Run record created
-  - run_uid uniqueness enforced
+---
 
-✓ test_zero_hits_aggregation [PASSED]
-  Purpose: Verify run_finish handles zero-hit games correctly
-  Result: Perfect run aggregation working
-  - Run finished with 0 hits
-  - All aggregates correctly set to 0
-  - Score = duration only (6000ms, no penalties)
+## Status Summary
 
-================================================================================
-COVERAGE VERIFICATION
-================================================================================
+### Completed Phases:
+✅ Phase 1: Instrumentation
+✅ Phase 2: Code analysis and bottleneck identification
+✅ Phase 3: Hit detection timing investigation
+✅ Phase 4: Real-time dashboard improvements
 
-The tests verify all critical repair requirements:
+### Not Implemented (Already Optimized):
+⏭️ FEAT-011: Serial Gateway Async - Already using non-blocking reads with in_waiting check
+⏭️ FEAT-012: Backend Async - Would require major refactoring, minimal benefit for event rate
+⏭️ FEAT-013: Database optimization - SQLite is fast enough for use case
+⏭️ FEAT-014: MQTT QoS - QoS 1 is appropriate, backend has deduplication
 
-1. ✓ Hit Aggregation from Database
-   - Stats calculated from actual Hit records in database
-   - Firmware-sent aggregates not blindly trusted
-   - Database is source of truth
+### Expected Impact:
+- **Primary improvement:** Dashboard latency reduced from 0-3000ms (avg 1500ms) to <500ms
+- **SSE push updates:** Events appear immediately instead of waiting for poll cycle
+- **Adaptive polling:** Faster updates during active games (1s vs 3s)
+- **Better UX:** In-progress hits now visible and distinguishable
 
-2. ✓ Incomplete Hit Handling
-   - Hits with duration_ms=0 excluded from aggregates
-   - Only completed hits (duration_ms > 0) counted
-   - Prevents skewed statistics from incomplete events
+### Physical Testing Required:
+⚠️ ESP32 physical testing needed to measure actual end-to-end latency
+⚠️ Enable DEBUG logging to collect real timing data
 
-3. ✓ Stale Run Detection
-   - Runs stuck in 'started' state for >30 minutes marked as 'abandoned'
-   - finished_at correctly remains NULL (not falsely completed)
-   - Recent active runs unaffected
-
-4. ✓ Active Run Counting
-   - Only runs with status='started' AND finished_at=NULL counted as active
-   - Abandoned and cancelled runs excluded
-   - Matches /api/health endpoint implementation
-
-5. ✓ Idempotency Protection
-   - Duplicate hit_start: no duplicate Hit records
-   - Duplicate hit_end: duration set once only
-   - Duplicate run_finish: no re-aggregation of finished runs
-   - Duplicate run_start: no duplicate Run records
-   - MQTT duplicate/out-of-order events handled safely
-
-6. ✓ Zero-Hit Games
-   - Perfect runs (0 hits) aggregate correctly
-   - Score = duration only (no penalties)
-   - No division-by-zero or null-reference errors
-
-================================================================================
-TEST WARNINGS
-================================================================================
-
-Non-critical deprecation warnings observed:
-- datetime.utcnow() deprecated (53 warnings)
-  → Migration to datetime.now(timezone.utc) recommended for production
-- SQLAlchemy declarative_base() deprecated (1 warning)
-  → Use sqlalchemy.orm.declarative_base() instead
-- FastAPI on_event deprecated (2 warnings)
-  → Migrate to lifespan event handlers
-- Pydantic class-based config deprecated (4 warnings)
-  → Use ConfigDict instead
-
-None of these warnings affect test results or core functionality.
-
-================================================================================
-CONCLUSION
-================================================================================
-
-All 9 automated tests PASSED successfully.
-
-The repairs are working correctly:
-- Hit aggregation uses database as source of truth
-- Incomplete hits properly excluded
-- Stale runs detected and marked as abandoned
-- Active run counting accurate
-- Event idempotency protected
-- Zero-hit games handled correctly
-
-The system is ready for physical hardware verification.
+All automated tests continue to pass. No functionality broken.

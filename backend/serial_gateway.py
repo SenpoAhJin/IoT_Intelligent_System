@@ -32,6 +32,9 @@ HEARTBEAT_INTERVAL = 10  # seconds (backend expects heartbeat within 30s)
 # Allow explicit COM port override
 EXPLICIT_COM_PORT = os.getenv("COM_PORT", None)
 
+# FEAT-002: Latency measurement configuration
+GATEWAY_VERBOSE = os.getenv("GATEWAY_VERBOSE", "0") == "1"
+
 
 class SerialGateway:
     """ESP32 Serial to MQTT gateway with event normalization."""
@@ -265,12 +268,24 @@ class SerialGateway:
             return False
         
         try:
+            # FEAT-002: Measure MQTT publish latency
+            mqtt_start = time.time()
+            
             topic = f"aquabuzz/{self.device_id}/events"
             payload = json.dumps(event_data)
             result = self.mqtt_client.publish(topic, payload, qos=1)
             
+            mqtt_end = time.time()
+            mqtt_lag_ms = (mqtt_end - mqtt_start) * 1000
+            
             if result.rc == mqtt.MQTT_ERR_SUCCESS:
                 print(f"[MQTT] Published event: {event_data['event']}")
+                
+                # FEAT-002: Latency logging
+                if GATEWAY_VERBOSE:
+                    sys.stderr.write(f"[Latency] {event_data['event']}: mqtt_publish={mqtt_lag_ms:.1f}ms\n")
+                    sys.stderr.flush()
+                
                 return True
             else:
                 print(f"[MQTT] Publish failed: {result.rc}")
@@ -372,12 +387,18 @@ class SerialGateway:
                 # Read from serial
                 if self.serial_port.in_waiting:
                     try:
+                        # FEAT-002: Measure serial read latency
+                        read_start = time.time()
                         line = self.serial_port.readline().decode('utf-8', errors='ignore')
+                        read_end = time.time()
                         
                         # Parse line
                         raw_event = self.parse_line(line)
                         
                         if raw_event:
+                            # FEAT-002: Add gateway reception timestamp
+                            gateway_rx_ts = time.time()
+                            
                             # Check if it's a game event
                             if "event" in raw_event:
                                 print(f"[Serial] Raw event: {json.dumps(raw_event)}")
@@ -386,7 +407,17 @@ class SerialGateway:
                                 normalized_event = self.normalize_event(raw_event)
                                 
                                 if normalized_event:
+                                    # FEAT-002: Add gateway timestamps for latency tracking
+                                    normalized_event["gateway_rx_ts"] = gateway_rx_ts
+                                    
                                     print(f"[Gateway] Normalized: {json.dumps(normalized_event)}")
+                                    
+                                    # FEAT-002: Latency logging
+                                    if GATEWAY_VERBOSE:
+                                        serial_lag_ms = (read_end - read_start) * 1000
+                                        sys.stderr.write(f"[Latency] {normalized_event['event']}: serial_read={serial_lag_ms:.1f}ms\n")
+                                        sys.stderr.flush()
+                                    
                                     self.publish_event(normalized_event)
                                 else:
                                     print(f"[Gateway] Event ignored or invalid")

@@ -171,7 +171,8 @@ void onMazePressed() {
       finishReleased = !finishPressed;
       
       // Serial output ONLY - gateway handles MQTT publishing
-      queuePrint("{\"run\":%d,\"event\":\"run_start\",\"t_ms\":0}", runNo);
+      // FEAT-001: Add esp32_ts_ms timestamp for latency measurement
+      queuePrint("{\"run\":%d,\"event\":\"run_start\",\"t_ms\":0,\"esp32_ts_ms\":%lu}", runNo, now);
     }
   } else if (state == RUNNING) {
     currentHitStartMs = now;
@@ -180,8 +181,9 @@ void onMazePressed() {
     hits[hitCount - 1].durationMs = 0;
     
     // Serial output ONLY
-    queuePrint("{\"run\":%d,\"event\":\"hit_start\",\"hit\":%d,\"t_ms\":%lu}",
-               runNo, hitCount, now - runStartMs);
+    // FEAT-001: Add esp32_ts_ms timestamp for latency measurement
+    queuePrint("{\"run\":%d,\"event\":\"hit_start\",\"hit\":%d,\"t_ms\":%lu,\"esp32_ts_ms\":%lu}",
+               runNo, hitCount, now - runStartMs, now);
   }
 }
 
@@ -192,8 +194,9 @@ void onMazeReleased() {
     hits[hitCount - 1].durationMs = duration;
     
     // Serial output ONLY
-    queuePrint("{\"run\":%d,\"event\":\"hit_end\",\"hit\":%d,\"t_ms\":%lu,\"dur_ms\":%lu}",
-               runNo, hitCount, now - runStartMs, duration);
+    // FEAT-001: Add esp32_ts_ms timestamp for latency measurement
+    queuePrint("{\"run\":%d,\"event\":\"hit_end\",\"hit\":%d,\"t_ms\":%lu,\"dur_ms\":%lu,\"esp32_ts_ms\":%lu}",
+               runNo, hitCount, now - runStartMs, duration, now);
     
     currentHitStartMs = 0;
   }
@@ -209,8 +212,9 @@ void onFinishPressed() {
       hits[hitCount - 1].durationMs = duration;
       
       // Serial output ONLY
-      queuePrint("{\"run\":%d,\"event\":\"hit_end\",\"hit\":%d,\"t_ms\":%lu,\"dur_ms\":%lu}",
-                 runNo, hitCount, now - runStartMs, duration);
+      // FEAT-001: Add esp32_ts_ms timestamp for latency measurement
+      queuePrint("{\"run\":%d,\"event\":\"hit_end\",\"hit\":%d,\"t_ms\":%lu,\"dur_ms\":%lu,\"esp32_ts_ms\":%lu}",
+                 runNo, hitCount, now - runStartMs, duration, now);
       
       currentHitStartMs = 0;
     }
@@ -236,8 +240,9 @@ void onFinishPressed() {
     unsigned long score = totalTimeMs + (scoredHits * hitPenaltyMs);
     
     // Serial output ONLY
-    queuePrint("{\"run\":%d,\"event\":\"run_finish\",\"t_ms\":%lu,\"hits\":%d,\"total_contact_ms\":%lu,\"longest_hit_ms\":%lu,\"hit_penalty_ms\":%lu,\"score\":%lu}",
-               runNo, totalTimeMs, hitCount, totalContactMs, longestHitMs, hitPenaltyMs, score);
+    // FEAT-001: Add esp32_ts_ms timestamp for latency measurement
+    queuePrint("{\"run\":%d,\"event\":\"run_finish\",\"t_ms\":%lu,\"hits\":%d,\"total_contact_ms\":%lu,\"longest_hit_ms\":%lu,\"hit_penalty_ms\":%lu,\"score\":%lu,\"esp32_ts_ms\":%lu}",
+               runNo, totalTimeMs, hitCount, totalContactMs, longestHitMs, hitPenaltyMs, score, now);
     
     delay(100);
     state = WAITING;

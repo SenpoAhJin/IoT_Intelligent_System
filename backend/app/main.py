@@ -9,6 +9,8 @@ from typing import List, Optional
 import os
 import asyncio
 import json
+import time
+import queue
 from datetime import datetime, timedelta
 
 from app.db import get_db, init_db, engine
@@ -88,6 +90,9 @@ async def startup():
 
 def handle_mqtt_event(event: dict):
     """Process incoming MQTT events with proper state tracking and deduplication."""
+    # FEAT-003: Measure backend event processing timing
+    backend_rx_ts = time.time()
+    
     event_type = event.get("event")
     device_id = event.get("device_id")
     
@@ -135,8 +140,19 @@ def handle_mqtt_event(event: dict):
                     status="started"
                 )
                 db.add(run)
+                
+                # FEAT-003: Measure database write timing
+                db_start = time.time()
                 db.commit()
+                db_end = time.time()
+                
                 print(f"[MQTT] Created run: {run_uid}")
+                
+                # FEAT-003: Latency logging
+                if os.getenv("LOG_LEVEL") == "DEBUG":
+                    db_write_ms = (db_end - db_start) * 1000
+                    processing_ms = (db_end - backend_rx_ts) * 1000
+                    print(f"[Latency] {event_type} run-{run_uid}: db_write={db_write_ms:.1f}ms, total={processing_ms:.1f}ms")
             else:
                 print(f"[MQTT] Run already exists: {run_uid} (duplicate event ignored)")
         
@@ -164,8 +180,19 @@ def handle_mqtt_event(event: dict):
                     duration_ms=0  # Will be updated on hit_end
                 )
                 db.add(hit)
+                
+                # FEAT-003: Measure database write timing
+                db_start = time.time()
                 db.commit()
+                db_end = time.time()
+                
                 print(f"[MQTT] Hit {hit_no} started for run {run_uid}")
+                
+                # FEAT-003: Latency logging
+                if os.getenv("LOG_LEVEL") == "DEBUG":
+                    db_write_ms = (db_end - db_start) * 1000
+                    processing_ms = (db_end - backend_rx_ts) * 1000
+                    print(f"[Latency] {event_type} run-{run_uid} hit-{hit_no}: db_write={db_write_ms:.1f}ms, total={processing_ms:.1f}ms")
             else:
                 print(f"[MQTT] Hit {hit_no} already exists (duplicate ignored)")
         
@@ -189,8 +216,19 @@ def handle_mqtt_event(event: dict):
                 # Update duration
                 if hit.duration_ms == 0:  # Only update if not already set
                     hit.duration_ms = dur_ms
+                    
+                    # FEAT-003: Measure database write timing
+                    db_start = time.time()
                     db.commit()
+                    db_end = time.time()
+                    
                     print(f"[MQTT] Hit {hit_no} completed: {dur_ms}ms")
+                    
+                    # FEAT-003: Latency logging
+                    if os.getenv("LOG_LEVEL") == "DEBUG":
+                        db_write_ms = (db_end - db_start) * 1000
+                        processing_ms = (db_end - backend_rx_ts) * 1000
+                        print(f"[Latency] {event_type} run-{run_uid} hit-{hit_no}: db_write={db_write_ms:.1f}ms, total={processing_ms:.1f}ms")
                 else:
                     print(f"[MQTT] Hit {hit_no} already completed (duplicate ignored)")
             else:
@@ -391,6 +429,51 @@ async def health(db: Session = Depends(get_db)):
         "abandoned_runs": abandoned_runs,
         "devices": device_status
     }
+
+
+@app.get("/api/live")
+async def live_events():
+    """
+    FEAT-009: Server-Sent Events endpoint for real-time dashboard updates.
+    Stream live game events to dashboard without polling.
+    """
+    client_queue = queue.Queue(maxsize=100)
+    sse_clients.append(client_queue)
+    
+    async def event_generator():
+        try:
+            while True:
+                # Wait for event with timeout (30s keep-alive)
+                try:
+                    event = await asyncio.wait_for(
+                        asyncio.to_thread(client_queue.get, timeout=30),
+                        timeout=31.0
+                    )
+                    # Send event to client
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    # Send keep-alive comment
+                    yield f": keep-alive\n\n"
+        except asyncio.CancelledError:
+            # Client disconnected
+            print("[SSE] Client disconnected")
+        finally:
+            # Clean up
+            if client_queue in sse_clients:
+                sse_clients.remove(client_queue)
+            print(f"[SSE] Client removed, {len(sse_clients)} clients remaining")
+    
+    print(f"[SSE] New client connected, {len(sse_clients)} total clients")
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 
 @app.get("/api/runs", response_model=List[RunSchema])

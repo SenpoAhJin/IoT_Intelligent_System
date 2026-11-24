@@ -353,13 +353,107 @@
         
         let activeRuns = [];
         
+        // FEAT-004: Dashboard latency measurement
+        let lastEventTimestamp = null;
+        let latencyStats = {
+            apiLatency: [],
+            renderLatency: []
+        };
+        
+        // FEAT-009: Server-Sent Events for real-time updates
+        let eventSource = null;
+        let sseReconnectAttempts = 0;
+        const SSE_MAX_RECONNECT_ATTEMPTS = 3;
+        let useSseUpdates = true;  // Try SSE first, fallback to polling if it fails
+        
+        function connectSSE() {
+            if (!useSseUpdates) return;
+            
+            try {
+                console.log('[SSE] Connecting to live events stream...');
+                eventSource = new EventSource(`${API_BASE}/live`);
+                
+                eventSource.onopen = () => {
+                    console.log('[SSE] Connected to live events stream');
+                    sseReconnectAttempts = 0;
+                };
+                
+                eventSource.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        handleLiveEvent(data);
+                    } catch (err) {
+                        console.error('[SSE] Error parsing event:', err);
+                    }
+                };
+                
+                eventSource.onerror = (error) => {
+                    console.error('[SSE] Connection error:', error);
+                    eventSource.close();
+                    
+                    sseReconnectAttempts++;
+                    
+                    if (sseReconnectAttempts >= SSE_MAX_RECONNECT_ATTEMPTS) {
+                        console.log('[SSE] Max reconnection attempts reached, falling back to polling only');
+                        useSseUpdates = false;
+                        return;
+                    }
+                    
+                    // Exponential backoff reconnection
+                    const delay = Math.min(1000 * Math.pow(2, sseReconnectAttempts), 10000);
+                    console.log(`[SSE] Reconnecting in ${delay}ms...`);
+                    setTimeout(connectSSE, delay);
+                };
+            } catch (err) {
+                console.error('[SSE] Failed to create EventSource:', err);
+                useSseUpdates = false;
+            }
+        }
+        
+        function handleLiveEvent(event) {
+            const eventType = event.event;
+            console.log(`[SSE] Received ${eventType} event:`, event);
+            
+            // FEAT-009: Trigger immediate refresh on key events
+            if (eventType === 'hit_start' || eventType === 'hit_end' || 
+                eventType === 'run_start' || eventType === 'run_finish') {
+                // Refresh data immediately without waiting for poll interval
+                loadData();
+            }
+        }
+        
         async function loadData() {
+            // FEAT-004: Measure API fetch timing
+            const fetchStart = performance.now();
+            
             await Promise.all([
                 loadHealth(),
                 loadLeaderboard(),
                 loadRecentRuns(),
                 loadPlayers()
             ]);
+            
+            const fetchEnd = performance.now();
+            const renderStart = performance.now();
+            
+            // Let browser render
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            
+            const renderEnd = performance.now();
+            
+            // FEAT-004: Track latency
+            const apiFetchMs = fetchEnd - fetchStart;
+            const renderMs = renderEnd - renderStart;
+            
+            latencyStats.apiLatency.push(apiFetchMs);
+            latencyStats.renderLatency.push(renderMs);
+            
+            // Keep only last 20 measurements
+            if (latencyStats.apiLatency.length > 20) latencyStats.apiLatency.shift();
+            if (latencyStats.renderLatency.length > 20) latencyStats.renderLatency.shift();
+            
+            // FEAT-004: Console logging for debugging
+            console.log(`[Dashboard] API fetch: ${apiFetchMs.toFixed(1)}ms, render: ${renderMs.toFixed(1)}ms`);
         }
         
         async function loadHealth() {
@@ -368,7 +462,14 @@
                 const data = await res.json();
                 
                 // Update active runs indicator
+                const previousActiveRuns = activeRuns;
                 activeRuns = data.active_runs || 0;
+                
+                // FEAT-008: Update polling rate based on active games
+                if (activeRuns !== previousActiveRuns) {
+                    updatePollRate();
+                }
+                
                 if (activeRuns > 0) {
                     document.getElementById('live-game-card').style.display = 'block';
                     document.getElementById('live-game-info').innerHTML = `
@@ -526,14 +627,30 @@
                 
                 let hitsHtml = '';
                 if (run.hit_records && run.hit_records.length > 0) {
-                    hitsHtml = run.hit_records.map(hit => `
-                        <div class="stat">
-                            <span class="stat-label">Hit #${hit.hit_no}</span>
-                            <span class="stat-value">
-                                ${(hit.start_ms / 1000).toFixed(2)}s → ${(hit.duration_ms).toFixed(0)}ms contact
-                            </span>
-                        </div>
-                    `).join('');
+                    // FEAT-007: Show in-progress vs completed hits differently
+                    hitsHtml = run.hit_records.map(hit => {
+                        if (hit.duration_ms === 0) {
+                            // In-progress hit
+                            return `
+                                <div class="stat" style="background: rgba(239, 68, 68, 0.1); border-left: 3px solid #ef4444;">
+                                    <span class="stat-label">🔴 Hit #${hit.hit_no} (IN PROGRESS)</span>
+                                    <span class="stat-value">
+                                        Started at ${(hit.start_ms / 1000).toFixed(2)}s
+                                    </span>
+                                </div>
+                            `;
+                        } else {
+                            // Completed hit
+                            return `
+                                <div class="stat">
+                                    <span class="stat-label">✓ Hit #${hit.hit_no}</span>
+                                    <span class="stat-value">
+                                        ${(hit.start_ms / 1000).toFixed(2)}s → ${(hit.duration_ms).toFixed(0)}ms contact
+                                    </span>
+                                </div>
+                            `;
+                        }
+                    }).join('');
                 } else {
                     hitsHtml = '<div class="empty-state">Perfect run - no hits!</div>';
                 }
@@ -612,8 +729,29 @@
             }
         }
         
-        // Auto-refresh every 3 seconds for real-time updates
-        setInterval(loadData, 3000);
+        // FEAT-008: Adaptive polling rate
+        let pollInterval = 3000;  // Start at 3 seconds
+        let intervalId = null;
+        let lastActiveCheck = 0;
+        
+        function updatePollRate() {
+            const newInterval = (activeRuns > 0) ? 1000 : 3000;  // 1s during games, 3s idle
+            
+            if (newInterval !== pollInterval) {
+                pollInterval = newInterval;
+                console.log(`[Dashboard] Polling rate changed to ${pollInterval}ms (active runs: ${activeRuns})`);
+                
+                // Restart interval with new rate
+                if (intervalId) clearInterval(intervalId);
+                intervalId = setInterval(loadData, pollInterval);
+            }
+        }
+        
+        // Start adaptive polling
+        intervalId = setInterval(loadData, pollInterval);
+        
+        // FEAT-009: Connect to SSE for real-time updates
+        connectSSE();
         
         // Initial load
         loadData();
