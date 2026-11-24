@@ -9,7 +9,7 @@ from typing import List, Optional
 import os
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.db import get_db, init_db, engine
 from app.models import Player, Device, Run, Hit, Suggestion
@@ -39,11 +39,39 @@ mqtt_client = None
 sse_clients = []
 
 
+def detect_and_mark_stale_runs(db: Session, timeout_minutes: int = 30):
+    """Detect and mark abandoned runs."""
+    cutoff = datetime.utcnow() - timedelta(minutes=timeout_minutes)
+    stale_runs = db.query(Run).filter(
+        Run.status == "started",
+        Run.started_at < cutoff,
+        Run.finished_at.is_(None)
+    ).all()
+    
+    for run in stale_runs:
+        run.status = "abandoned"
+        print(f"[Startup] Marked stale run as abandoned: {run.run_uid}")
+    
+    if stale_runs:
+        db.commit()
+    
+    return len(stale_runs)
+
+
 @app.on_event("startup")
 async def startup():
     """Initialize database and MQTT client on startup."""
     init_db()
     print("[API] Database initialized")
+    
+    # Detect and mark stale runs
+    db_session = next(get_db())
+    try:
+        stale_count = detect_and_mark_stale_runs(db_session, timeout_minutes=30)
+        if stale_count > 0:
+            print(f"[Startup] Marked {stale_count} stale run(s) as abandoned")
+    finally:
+        db_session.close()
     
     # Start MQTT client
     global mqtt_client
@@ -59,7 +87,7 @@ async def startup():
 
 
 def handle_mqtt_event(event: dict):
-    """Process incoming MQTT events."""
+    """Process incoming MQTT events with proper state tracking and deduplication."""
     event_type = event.get("event")
     device_id = event.get("device_id")
     
@@ -83,6 +111,10 @@ def handle_mqtt_event(event: dict):
         run_uid = event.get("run_uid")
         player_id = event.get("player_id", "guest")
         
+        if not run_uid:
+            print(f"[MQTT] Event missing run_uid: {event_type}")
+            return
+        
         # Ensure player exists
         player = db.query(Player).filter(Player.id == player_id).first()
         if not player:
@@ -91,7 +123,7 @@ def handle_mqtt_event(event: dict):
             db.commit()
         
         if event_type == "run_start":
-            # Create or update run
+            # Create run (idempotent - only create if doesn't exist)
             run = db.query(Run).filter(Run.run_uid == run_uid).first()
             if not run:
                 run = Run(
@@ -104,64 +136,145 @@ def handle_mqtt_event(event: dict):
                 )
                 db.add(run)
                 db.commit()
+                print(f"[MQTT] Created run: {run_uid}")
+            else:
+                print(f"[MQTT] Run already exists: {run_uid} (duplicate event ignored)")
         
         elif event_type == "hit_start":
-            # Record hit start
+            # Track hit start - store in Hit table immediately with duration=0
             run = db.query(Run).filter(Run.run_uid == run_uid).first()
-            if run:
-                # Will be completed on hit_end
-                pass
+            if not run:
+                print(f"[MQTT] WARNING: hit_start for unknown run {run_uid}")
+                return
+            
+            hit_no = event.get("hit", 0)
+            start_ms = event.get("t_ms", 0)
+            
+            # Check if hit already exists (idempotency)
+            existing = db.query(Hit).filter(
+                Hit.run_uid == run_uid, 
+                Hit.hit_no == hit_no
+            ).first()
+            
+            if not existing:
+                hit = Hit(
+                    run_uid=run_uid,
+                    hit_no=hit_no,
+                    start_ms=start_ms,
+                    duration_ms=0  # Will be updated on hit_end
+                )
+                db.add(hit)
+                db.commit()
+                print(f"[MQTT] Hit {hit_no} started for run {run_uid}")
+            else:
+                print(f"[MQTT] Hit {hit_no} already exists (duplicate ignored)")
         
         elif event_type == "hit_end":
             # Complete hit record
             run = db.query(Run).filter(Run.run_uid == run_uid).first()
-            if run:
-                hit_no = event.get("hit", 0)
-                # Check if hit already exists (idempotency)
-                existing = db.query(Hit).filter(
-                    Hit.run_uid == run_uid, 
-                    Hit.hit_no == hit_no
-                ).first()
-                
-                if not existing:
-                    hit = Hit(
-                        run_uid=run_uid,
-                        hit_no=hit_no,
-                        start_ms=event.get("t_ms", 0) - event.get("dur_ms", 0),
-                        duration_ms=event.get("dur_ms", 0)
-                    )
-                    db.add(hit)
-                    run.hits += 1
+            if not run:
+                print(f"[MQTT] WARNING: hit_end for unknown run {run_uid}")
+                return
+            
+            hit_no = event.get("hit", 0)
+            dur_ms = event.get("dur_ms", 0)
+            
+            # Find existing hit record
+            hit = db.query(Hit).filter(
+                Hit.run_uid == run_uid, 
+                Hit.hit_no == hit_no
+            ).first()
+            
+            if hit:
+                # Update duration
+                if hit.duration_ms == 0:  # Only update if not already set
+                    hit.duration_ms = dur_ms
                     db.commit()
+                    print(f"[MQTT] Hit {hit_no} completed: {dur_ms}ms")
+                else:
+                    print(f"[MQTT] Hit {hit_no} already completed (duplicate ignored)")
+            else:
+                # Hit start was missed - create complete record
+                print(f"[MQTT] WARNING: hit_end without hit_start, creating complete record")
+                start_ms = event.get("t_ms", 0) - dur_ms
+                hit = Hit(
+                    run_uid=run_uid,
+                    hit_no=hit_no,
+                    start_ms=start_ms,
+                    duration_ms=dur_ms
+                )
+                db.add(hit)
+                db.commit()
         
         elif event_type == "run_finish":
-            # Complete run
+            # Complete run with final statistics
             run = db.query(Run).filter(Run.run_uid == run_uid).first()
-            if run:
+            if not run:
+                print(f"[MQTT] WARNING: run_finish for unknown run {run_uid}")
+                return
+            
+            # Idempotent - only update if not already finished
+            if run.status != "finished":
                 run.finished_at = datetime.utcnow()
                 run.duration_ms = event.get("t_ms", 0)
-                run.hits = event.get("hits", 0)
-                run.total_contact_ms = event.get("total_contact_ms", 0)
-                run.longest_hit_ms = event.get("longest_hit_ms", 0)
                 run.hit_penalty_ms = event.get("hit_penalty_ms", 2000)
-                run.score = event.get("score", 0)
+                
+                # CRITICAL FIX: Calculate aggregate stats from actual Hit records
+                # Do NOT trust firmware's aggregate calculation - use database as source of truth
+                print(f"[MQTT] Processing run_finish for {run_uid}")
+                print(f"[MQTT] Querying Hit records for run_uid: {run_uid}")
+                
+                hit_records = db.query(Hit).filter(Hit.run_uid == run_uid).all()
+                print(f"[MQTT] Found {len(hit_records)} Hit record(s) in database")
+                
+                # Count only completed hits (duration_ms > 0)
+                completed_hits = [h for h in hit_records if h.duration_ms > 0]
+                incomplete_hits = [h for h in hit_records if h.duration_ms == 0]
+                
+                print(f"[MQTT] Completed hits (duration > 0): {len(completed_hits)}")
+                print(f"[MQTT] Incomplete hits (duration = 0): {len(incomplete_hits)}")
+                
+                run.hits = len(completed_hits)
+                run.total_contact_ms = sum(h.duration_ms for h in completed_hits)
+                run.longest_hit_ms = max((h.duration_ms for h in completed_hits), default=0)
+                
+                # Recalculate score using actual hit count
+                free_hits = 0  # Can be made configurable
+                scored_hits = max(0, run.hits - free_hits)
+                run.score = run.duration_ms + (scored_hits * run.hit_penalty_ms)
+                
                 run.status = "finished"
                 db.commit()
                 
+                print(f"[MQTT] Run finished: {run_uid}")
+                print(f"  Duration: {run.duration_ms}ms")
+                print(f"  Hits (from DB): {run.hits} (firmware sent: {event.get('hits', 'N/A')})")
+                print(f"  Total Contact (from DB): {run.total_contact_ms}ms (firmware sent: {event.get('total_contact_ms', 'N/A')}ms)")
+                print(f"  Longest Hit (from DB): {run.longest_hit_ms}ms (firmware sent: {event.get('longest_hit_ms', 'N/A')}ms)")
+                print(f"  Score (recalculated): {run.score}ms (firmware sent: {event.get('score', 'N/A')}ms)")
+                
                 # Trigger intelligence analysis
                 analyze_run(run, db)
+            else:
+                print(f"[MQTT] Run already finished: {run_uid} (duplicate ignored)")
         
         elif event_type == "run_cancel":
             run = db.query(Run).filter(Run.run_uid == run_uid).first()
-            if run:
+            if run and run.status != "cancelled":
                 run.status = "cancelled"
+                run.duration_ms = event.get("t_ms", 0)
                 db.commit()
+                print(f"[MQTT] Run cancelled: {run_uid}")
+            else:
+                print(f"[MQTT] Run already cancelled or not found: {run_uid}")
         
         # Broadcast to SSE clients
         broadcast_event(event)
         
     except Exception as e:
-        print(f"[MQTT] Error handling event: {e}")
+        print(f"[MQTT] Error handling event {event_type}: {e}")
+        import traceback
+        traceback.print_exc()
         db.rollback()
     finally:
         db.close()
@@ -170,16 +283,28 @@ def handle_mqtt_event(event: dict):
 def analyze_run(run: Run, db: Session):
     """Run intelligence analysis on completed run."""
     try:
-        # Extract features
-        hit_records = [{"duration_ms": h.duration_ms} for h in run.hit_records]
+        # Extract features - prepare hit_records as plain dicts
+        hit_records = []
+        for h in run.hit_records:
+            hit_records.append({
+                "start_ms": h.start_ms,
+                "duration_ms": h.duration_ms
+            })
+        
         run_data = {
-            "duration_ms": run.duration_ms,
-            "hits": run.hits,
-            "score": run.score,
+            "duration_ms": run.duration_ms or 0,
+            "hits": run.hits or 0,
+            "score": run.score or 0,
             "hit_records": hit_records,
-            "total_contact_ms": run.total_contact_ms,
-            "longest_hit_ms": run.longest_hit_ms
+            "total_contact_ms": run.total_contact_ms or 0,
+            "longest_hit_ms": run.longest_hit_ms or 0,
+            "status": run.status
         }
+        
+        # Only analyze if run was completed successfully
+        if run.status != "finished":
+            print(f"[Intelligence] Skipping analysis for {run.status} run {run.run_uid}")
+            return
         
         feat = features.extract_features(run_data)
         
@@ -207,6 +332,8 @@ def analyze_run(run: Run, db: Session):
         
     except Exception as e:
         print(f"[Intelligence] Analysis error: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def broadcast_event(event: dict):
@@ -229,11 +356,40 @@ async def health(db: Session = Depends(get_db)):
     total_runs = db.query(Run).count()
     total_players = db.query(Player).count()
     
+    # Active runs: status='started' AND finished_at is NULL (not stale)
+    active_runs = db.query(Run).filter(
+        Run.status == "started",
+        Run.finished_at.is_(None)
+    ).count()
+    
+    completed_runs = db.query(Run).filter(Run.status == "finished").count()
+    abandoned_runs = db.query(Run).filter(Run.status == "abandoned").count()
+    
+    # Get device status
+    devices = db.query(Device).all()
+    device_status = []
+    for device in devices:
+        # Consider device online if heartbeat within last 30 seconds
+        is_online = False
+        if device.last_heartbeat:
+            time_since = (datetime.utcnow() - device.last_heartbeat).total_seconds()
+            is_online = time_since < 30
+        
+        device_status.append({
+            "id": device.id,
+            "online": is_online,
+            "last_heartbeat": device.last_heartbeat.isoformat() if device.last_heartbeat else None
+        })
+    
     return {
         "status": "healthy",
         "mqtt_connected": mqtt_client.connected if mqtt_client else False,
         "total_runs": total_runs,
-        "total_players": total_players
+        "total_players": total_players,
+        "active_runs": active_runs,
+        "completed_runs": completed_runs,
+        "abandoned_runs": abandoned_runs,
+        "devices": device_status
     }
 
 
@@ -342,15 +498,25 @@ async def get_insights(player_id: str, db: Session = Depends(get_db)):
     if not runs:
         raise HTTPException(status_code=404, detail="No completed runs")
     
-    # Build feature dicts
+    # Build feature dicts with proper hit_records
     run_dicts = []
     for run in runs:
+        hit_records = []
+        for h in run.hit_records:
+            hit_records.append({
+                "start_ms": h.start_ms,
+                "duration_ms": h.duration_ms
+            })
+        
         run_dicts.append({
-            "duration_ms": run.duration_ms,
-            "hits": run.hits,
-            "score": run.score,
-            "finished_at": run.finished_at.isoformat(),
-            "hit_records": [{"duration_ms": h.duration_ms} for h in run.hit_records]
+            "duration_ms": run.duration_ms or 0,
+            "hits": run.hits or 0,
+            "score": run.score or 0,
+            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+            "hit_records": hit_records,
+            "total_contact_ms": run.total_contact_ms or 0,
+            "longest_hit_ms": run.longest_hit_ms or 0,
+            "status": run.status
         })
     
     # Latest run analysis
