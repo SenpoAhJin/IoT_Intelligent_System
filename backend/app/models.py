@@ -83,3 +83,29 @@ class Suggestion(Base):
     data = Column(Text, nullable=True)  # JSON string of supporting data
     
     priority = Column(String, default="normal")  # low, normal, high
+
+
+class GameCommand(Base):
+    """
+    PHASE 2B-2: Track dashboard-initiated game commands.
+    Commands flow: Dashboard → Backend → MQTT → Serial Gateway → ESP32
+    """
+    __tablename__ = "game_commands"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    request_id = Column(String, unique=True, nullable=False, index=True)
+    device_id = Column(String, ForeignKey("devices.id"), nullable=False)
+    command = Column(String, nullable=False)  # "start", "finish"
+    
+    # Command lifecycle timestamps
+    requested_at = Column(DateTime, default=datetime.utcnow)
+    sent_at = Column(DateTime, nullable=True)
+    acknowledged_at = Column(DateTime, nullable=True)
+    
+    # Status: "pending", "sent", "acknowledged", "timeout", "rejected"
+    status = Column(String, default="pending")
+    
+    # Metadata
+    player_id = Column(String, nullable=True)
+    run_uid = Column(String, nullable=True)  # Set after run_start event received
+    error_reason = Column(String, nullable=True)

@@ -2,6 +2,11 @@
 AquaBuzz Serial-to-MQTT Gateway v2
 Reads JSON events from ESP32 via USB Serial and publishes to MQTT broker.
 Handles event normalization, heartbeat publishing, and network independence.
+
+PHASE 2B-2: Added command transport capability
+- Subscribes to MQTT command topics
+- Forwards commands to ESP32 via serial
+- Tracks acknowledgments and timeouts
 """
 
 import serial
@@ -13,6 +18,7 @@ import paho.mqtt.client as mqtt
 import os
 import sys
 import uuid
+import queue
 from datetime import datetime
 from typing import Optional, Dict
 
@@ -55,6 +61,11 @@ class SerialGateway:
         
         # Heartbeat thread
         self.heartbeat_thread = None
+        
+        # PHASE 2B-2: Command transport infrastructure
+        self.command_queue = queue.Queue(maxsize=10)  # Command queue for serial transmission
+        self.pending_commands = {}  # cmd_id → {"sent_at": time, "timeout": 5.0, "command": {...}}
+        self.command_timeout_seconds = 5.0
         
         print(f"[Gateway] Session ID: {self.gateway_session_id}")
         
@@ -148,6 +159,9 @@ class SerialGateway:
         self.mqtt_client.on_connect = self._on_mqtt_connect
         self.mqtt_client.on_disconnect = self._on_mqtt_disconnect
         
+        # PHASE 2B-2: Handle incoming command messages
+        self.mqtt_client.on_message = self._on_mqtt_message
+        
         # Optional authentication
         username = os.getenv("MQTT_USERNAME")
         password = os.getenv("MQTT_PASSWORD")
@@ -159,6 +173,11 @@ class SerialGateway:
         if rc == 0:
             print(f"[MQTT] Connected to {MQTT_BROKER}:{MQTT_PORT}")
             self.mqtt_connected = True
+            
+            # PHASE 2B-2: Subscribe to command topic for this device
+            command_topic = f"aquabuzz/commands/{self.device_id}"
+            client.subscribe(command_topic, qos=1)
+            print(f"[MQTT] Subscribed to {command_topic}")
         else:
             print(f"[MQTT] Connection failed with code {rc}")
             self.mqtt_connected = False
@@ -170,6 +189,38 @@ class SerialGateway:
         
         if rc != 0 and self.running:
             print(f"[MQTT] Unexpected disconnect. Will reconnect...")
+    
+    def _on_mqtt_message(self, client, userdata, msg):
+        """
+        PHASE 2B-2: Handle incoming MQTT messages (commands from backend).
+        
+        Expected message on aquabuzz/commands/{device_id}:
+        {
+            "command": "start"|"finish",
+            "request_id": "req-12345678",
+            "player_id": "alice" (for start command),
+            "run_uid": "..." (for finish command),
+            "timestamp": 1234567890
+        }
+        """
+        try:
+            topic = msg.topic
+            payload = msg.payload.decode('utf-8')
+            
+            # Only process command messages
+            if f"/commands/{self.device_id}" not in topic:
+                return
+            
+            command_data = json.loads(payload)
+            print(f"[MQTT] Received command: {json.dumps(command_data)}")
+            
+            # Queue command for serial transmission
+            self.queue_command(command_data)
+            
+        except json.JSONDecodeError as e:
+            print(f"[MQTT] Invalid JSON in command message: {e}")
+        except Exception as e:
+            print(f"[MQTT] Error processing command: {e}")
     
     def connect_mqtt(self):
         """Connect to MQTT broker with retry."""
@@ -323,6 +374,161 @@ class SerialGateway:
             print(f"[MQTT] Heartbeat error: {e}")
             return False
     
+    def queue_command(self, command_data: dict):
+        """
+        PHASE 2B-2: Queue a command for transmission to ESP32.
+        
+        Args:
+            command_data: Backend command with request_id, command, timestamp
+        """
+        try:
+            self.command_queue.put_nowait(command_data)
+            print(f"[Command] Queued: {command_data['command']} (request_id: {command_data['request_id']})")
+        except queue.Full:
+            print(f"[Command] ERROR: Command queue full, cannot queue {command_data['command']}")
+            # Publish immediate failure
+            self.publish_command_ack(command_data['request_id'], command_data['command'], "error", "Queue full")
+    
+    def send_command(self, command_data: dict):
+        """
+        PHASE 2B-2: Send command to ESP32 via serial.
+        
+        Protocol (compatible with future firmware):
+        {"cmd":"start","t":1234567890}\n
+        {"cmd":"finish","t":1234567890}\n
+        """
+        if not self.serial_port or not self.serial_port.is_open:
+            print(f"[Command] ERROR: Cannot send command, serial not connected")
+            self.publish_command_ack(
+                command_data['request_id'],
+                command_data['command'],
+                "error",
+                "Serial port not connected"
+            )
+            return False
+        
+        try:
+            # Build serial command message
+            serial_cmd = {
+                "cmd": command_data['command'],
+                "t": command_data['timestamp']
+            }
+            
+            cmd_json = json.dumps(serial_cmd) + "\n"
+            
+            # Write to serial (non-blocking)
+            self.serial_port.write(cmd_json.encode('utf-8'))
+            print(f"[Command] Sent to ESP32: {cmd_json.strip()}")
+            
+            # Track for acknowledgment/timeout
+            cmd_id = f"{command_data['command']}-{command_data['timestamp']}"
+            self.pending_commands[cmd_id] = {
+                "sent_at": time.time(),
+                "timeout": self.command_timeout_seconds,
+                "command": command_data,
+                "request_id": command_data['request_id']
+            }
+            
+            return True
+            
+        except Exception as e:
+            print(f"[Command] ERROR sending to ESP32: {e}")
+            self.publish_command_ack(
+                command_data['request_id'],
+                command_data['command'],
+                "error",
+                f"Serial write failed: {str(e)}"
+            )
+            return False
+    
+    def handle_command_acknowledgment(self, ack_data: dict):
+        """
+        PHASE 2B-2: Process acknowledgment from ESP32.
+        
+        Expected ESP32 ACK format:
+        {"cmd":"ack","cmd_id":"start-1234567890","status":"ok"}
+        {"cmd":"ack","cmd_id":"start-1234567890","status":"error","reason":"already_running"}
+        """
+        cmd_id = ack_data.get("cmd_id")
+        status = ack_data.get("status")  # "ok" or "error"
+        reason = ack_data.get("reason", "")
+        
+        if not cmd_id or cmd_id not in self.pending_commands:
+            print(f"[Command] ACK for unknown cmd_id: {cmd_id}")
+            return
+        
+        # Remove from pending
+        pending_info = self.pending_commands.pop(cmd_id)
+        request_id = pending_info["request_id"]
+        command_name = pending_info["command"]["command"]
+        
+        # Publish acknowledgment to backend via MQTT
+        self.publish_command_ack(request_id, command_name, status, reason)
+        
+        print(f"[Command] ACK received: {cmd_id} → {status} {reason}")
+    
+    def publish_command_ack(self, request_id: str, command: str, status: str, error_reason: str = ""):
+        """
+        PHASE 2B-2: Publish command acknowledgment to backend.
+        
+        Args:
+            request_id: Backend's request identifier
+            command: "start" or "finish"
+            status: "ok", "error", or "timeout"
+            error_reason: Error description if status != "ok"
+        """
+        if not self.mqtt_connected:
+            print(f"[Command] Cannot publish ACK, MQTT disconnected")
+            return
+        
+        ack_payload = {
+            "device_id": self.device_id,
+            "request_id": request_id,
+            "command": command,
+            "status": status,
+            "timestamp": int(time.time())
+        }
+        
+        if error_reason:
+            ack_payload["error_reason"] = error_reason
+        
+        topic = f"aquabuzz/{self.device_id}/ack"
+        payload_json = json.dumps(ack_payload)
+        
+        result = self.mqtt_client.publish(topic, payload_json, qos=1)
+        
+        if result.rc == mqtt.MQTT_ERR_SUCCESS:
+            print(f"[Command] Published ACK: {status} for {request_id}")
+        else:
+            print(f"[Command] Failed to publish ACK: {result.rc}")
+    
+    def check_command_timeouts(self):
+        """
+        PHASE 2B-2: Check for commands that haven't been acknowledged.
+        Called periodically during read loop.
+        """
+        now = time.time()
+        timed_out = []
+        
+        for cmd_id, cmd_info in list(self.pending_commands.items()):
+            if now - cmd_info["sent_at"] > cmd_info["timeout"]:
+                timed_out.append(cmd_id)
+        
+        for cmd_id in timed_out:
+            cmd_info = self.pending_commands.pop(cmd_id)
+            request_id = cmd_info["request_id"]
+            command_name = cmd_info["command"]["command"]
+            
+            print(f"[Command] TIMEOUT: {cmd_id} (no acknowledgment after {cmd_info['timeout']}s)")
+            
+            # Publish timeout to backend
+            self.publish_command_ack(
+                request_id,
+                command_name,
+                "timeout",
+                f"No acknowledgment received within {cmd_info['timeout']}s"
+            )
+    
     def heartbeat_loop(self):
         """Background thread for publishing heartbeats."""
         print("[Heartbeat] Thread started")
@@ -422,6 +628,11 @@ class SerialGateway:
                                 else:
                                     print(f"[Gateway] Event ignored or invalid")
                             
+                            # PHASE 2B-2: Handle command acknowledgments from ESP32
+                            elif "cmd" in raw_event and raw_event.get("cmd") == "ack":
+                                print(f"[ESP32] ACK: {json.dumps(raw_event)}")
+                                self.handle_command_acknowledgment(raw_event)
+                            
                             # Handle info messages
                             elif "info" in raw_event:
                                 print(f"[ESP32] Info: {raw_event}")
@@ -435,6 +646,19 @@ class SerialGateway:
                         pass
                     except Exception as e:
                         print(f"[Serial] Read error: {e}")
+                
+                # PHASE 2B-2: Process command queue (non-blocking)
+                try:
+                    while not self.command_queue.empty():
+                        command_data = self.command_queue.get_nowait()
+                        self.send_command(command_data)
+                except queue.Empty:
+                    pass
+                except Exception as e:
+                    print(f"[Command] Error processing queue: {e}")
+                
+                # PHASE 2B-2: Check for command timeouts every iteration
+                self.check_command_timeouts()
                 
                 # Small delay to prevent CPU spinning
                 time.sleep(0.01)

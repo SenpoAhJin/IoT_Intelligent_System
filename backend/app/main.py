@@ -10,11 +10,10 @@ import os
 import asyncio
 import json
 import time
-import queue
 from datetime import datetime, timedelta
 
 from app.db import get_db, init_db, engine
-from app.models import Player, Device, Run, Hit, Suggestion
+from app.models import Player, Device, Run, Hit, Suggestion, GameCommand
 from app.schemas import (
     RunSchema, RunDetail, PlayerStats, DeviceSchema, 
     LeaderboardEntry, DifficultyConfig, InsightResponse, SuggestionSchema
@@ -37,8 +36,9 @@ app.add_middleware(
 # Global MQTT client
 mqtt_client = None
 
-# SSE clients for live updates
-sse_clients = []
+# SSE clients for live updates (AsyncIO queues for proper async support)
+sse_clients = []  # List of asyncio.Queue instances
+sse_client_counter = 0  # For debugging client connections
 
 
 def detect_and_mark_stale_runs(db: Session, timeout_minutes: int = 30):
@@ -95,6 +95,7 @@ def handle_mqtt_event(event: dict):
     
     event_type = event.get("event")
     device_id = event.get("device_id")
+    topic = event.get("_topic", "")
     
     db = next(get_db())
     
@@ -107,9 +108,14 @@ def handle_mqtt_event(event: dict):
             db.commit()
         
         # Handle heartbeat
-        if "heartbeat" in event.get("_topic", ""):
+        if "heartbeat" in topic:
             device.last_heartbeat = datetime.utcnow()
             db.commit()
+            return
+        
+        # PHASE 2B-2: Handle command acknowledgments
+        if "/ack" in topic:
+            handle_command_ack(event, db)
             return
         
         # Handle game events
@@ -318,6 +324,56 @@ def handle_mqtt_event(event: dict):
         db.close()
 
 
+def handle_command_ack(ack_event: dict, db: Session):
+    """
+    PHASE 2B-2: Handle command acknowledgment from Serial Gateway.
+    
+    Expected ack_event structure:
+    {
+        "command": "start"|"finish",
+        "request_id": "req-12345678",
+        "status": "ok"|"error",
+        "timestamp": 1234567890,
+        "device_id": "aquabuzz-001",
+        "error_reason": "..." (if status="error")
+    }
+    """
+    request_id = ack_event.get("request_id")
+    status = ack_event.get("status")  # "ok" or "error"
+    
+    if not request_id:
+        print("[GameControl] ACK missing request_id, ignoring")
+        return
+    
+    cmd = db.query(GameCommand).filter(
+        GameCommand.request_id == request_id
+    ).first()
+    
+    if not cmd:
+        print(f"[GameControl] ACK for unknown request_id: {request_id}")
+        return
+    
+    if status == "ok":
+        cmd.status = "acknowledged"
+        cmd.acknowledged_at = datetime.utcnow()
+        print(f"[GameControl] Command acknowledged: {request_id} ({cmd.command})")
+    else:
+        cmd.status = "rejected"
+        cmd.error_reason = ack_event.get("error_reason", "Command rejected by device")
+        print(f"[GameControl] Command rejected: {request_id} - {cmd.error_reason}")
+    
+    db.commit()
+    
+    # Broadcast ACK to dashboard via SSE
+    broadcast_event({
+        "event": "command_ack",
+        "request_id": request_id,
+        "command": cmd.command,
+        "status": cmd.status,
+        "device_id": cmd.device_id
+    })
+
+
 def analyze_run(run: Run, db: Session):
     """Run intelligence analysis on completed run."""
     try:
@@ -374,13 +430,299 @@ def analyze_run(run: Run, db: Session):
         traceback.print_exc()
 
 
-def broadcast_event(event: dict):
-    """Broadcast event to all SSE clients."""
-    for queue in sse_clients:
+async def broadcast_event_async(event: dict):
+    """Broadcast event to all SSE clients (async version)."""
+    if not sse_clients:
+        return
+    
+    dead_clients = []
+    for client_id, client_queue in sse_clients:
         try:
-            queue.put_nowait(event)
-        except:
-            pass
+            # Use put_nowait to avoid blocking, but track full queues
+            client_queue.put_nowait(event)
+        except asyncio.QueueFull:
+            print(f"[SSE] Warning: Client {client_id} queue full, event dropped: {event.get('event')}")
+        except Exception as e:
+            print(f"[SSE] Error broadcasting to client {client_id}: {e}")
+            dead_clients.append((client_id, client_queue))
+    
+    # Clean up dead clients
+    for dead_client in dead_clients:
+        if dead_client in sse_clients:
+            sse_clients.remove(dead_client)
+            print(f"[SSE] Removed dead client {dead_client[0]}")
+
+
+def broadcast_event(event: dict):
+    """Broadcast event to all SSE clients (sync wrapper for MQTT handler)."""
+    # Create event loop task if we're in an async context, otherwise schedule it
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(broadcast_event_async(event))
+        else:
+            loop.run_until_complete(broadcast_event_async(event))
+    except RuntimeError:
+        # No event loop, create one
+        asyncio.run(broadcast_event_async(event))
+
+
+@app.get("/")
+async def root():
+    return {"message": "AquaBuzz Intelligence API", "version": "1.0.0"}
+
+
+# ============================================================================
+# PHASE 2B-2: DASHBOARD GAME CONTROL ENDPOINTS
+# ============================================================================
+
+@app.post("/api/game/start")
+async def start_game(
+    device_id: str = "aquabuzz-001",
+    player_id: str = "guest",
+    db: Session = Depends(get_db)
+):
+    """
+    PHASE 2B-2: Request game start via dashboard.
+    
+    Flow:
+    1. Validate no active game on device
+    2. Validate no pending commands
+    3. Create GameCommand record
+    4. Publish command to MQTT (Serial Gateway subscribes)
+    5. Return command status
+    """
+    # 1. Check for active game
+    active_run = db.query(Run).filter(
+        Run.device_id == device_id,
+        Run.status == "started",
+        Run.finished_at.is_(None)
+    ).first()
+    
+    if active_run:
+        raise HTTPException(status_code=400, detail="Game already in progress")
+    
+    # 2. Check for pending commands
+    pending_cmd = db.query(GameCommand).filter(
+        GameCommand.device_id == device_id,
+        GameCommand.status.in_(["pending", "sent"])
+    ).first()
+    
+    if pending_cmd:
+        raise HTTPException(status_code=409, detail="Command already pending")
+    
+    # 3. Create command record
+    import uuid
+    request_id = f"req-{uuid.uuid4().hex[:8]}"
+    
+    cmd = GameCommand(
+        request_id=request_id,
+        device_id=device_id,
+        command="start",
+        player_id=player_id,
+        status="pending"
+    )
+    db.add(cmd)
+    db.commit()
+    
+    # 4. Publish to MQTT
+    if mqtt_client and mqtt_client.connected:
+        mqtt_payload = {
+            "command": "start",
+            "request_id": request_id,
+            "player_id": player_id,
+            "timestamp": int(time.time())
+        }
+        
+        success = mqtt_client.publish(f"aquabuzz/commands/{device_id}", mqtt_payload)
+        
+        if success:
+            cmd.status = "sent"
+            cmd.sent_at = datetime.utcnow()
+            db.commit()
+            print(f"[GameControl] START command sent: {request_id}")
+            return {"request_id": request_id, "status": "sent"}
+        else:
+            cmd.status = "rejected"
+            cmd.error_reason = "MQTT publish failed"
+            db.commit()
+            raise HTTPException(status_code=503, detail="Failed to send command to device")
+    else:
+        cmd.status = "rejected"
+        cmd.error_reason = "MQTT not connected"
+        db.commit()
+        raise HTTPException(status_code=503, detail="MQTT broker not connected")
+
+
+@app.post("/api/game/finish")
+async def finish_game(
+    device_id: str = "aquabuzz-001",
+    db: Session = Depends(get_db)
+):
+    """
+    PHASE 2B-2: Request game finish via dashboard.
+    
+    Flow:
+    1. Validate active game exists
+    2. Validate no pending commands
+    3. Create GameCommand record
+    4. Publish command to MQTT
+    5. Return command status
+    """
+    # 1. Check for active game
+    active_run = db.query(Run).filter(
+        Run.device_id == device_id,
+        Run.status == "started",
+        Run.finished_at.is_(None)
+    ).first()
+    
+    if not active_run:
+        raise HTTPException(status_code=400, detail="No active game to finish")
+    
+    # 2. Check for pending commands
+    pending_cmd = db.query(GameCommand).filter(
+        GameCommand.device_id == device_id,
+        GameCommand.status.in_(["pending", "sent"])
+    ).first()
+    
+    if pending_cmd:
+        raise HTTPException(status_code=409, detail="Command already pending")
+    
+    # 3. Create command record
+    import uuid
+    request_id = f"req-{uuid.uuid4().hex[:8]}"
+    
+    cmd = GameCommand(
+        request_id=request_id,
+        device_id=device_id,
+        command="finish",
+        run_uid=active_run.run_uid,
+        status="pending"
+    )
+    db.add(cmd)
+    db.commit()
+    
+    # 4. Publish to MQTT
+    if mqtt_client and mqtt_client.connected:
+        mqtt_payload = {
+            "command": "finish",
+            "request_id": request_id,
+            "run_uid": active_run.run_uid,
+            "timestamp": int(time.time())
+        }
+        
+        success = mqtt_client.publish(f"aquabuzz/commands/{device_id}", mqtt_payload)
+        
+        if success:
+            cmd.status = "sent"
+            cmd.sent_at = datetime.utcnow()
+            db.commit()
+            print(f"[GameControl] FINISH command sent: {request_id}")
+            return {"request_id": request_id, "status": "sent", "run_uid": active_run.run_uid}
+        else:
+            cmd.status = "rejected"
+            cmd.error_reason = "MQTT publish failed"
+            db.commit()
+            raise HTTPException(status_code=503, detail="Failed to send command to device")
+    else:
+        cmd.status = "rejected"
+        cmd.error_reason = "MQTT not connected"
+        db.commit()
+        raise HTTPException(status_code=503, detail="MQTT broker not connected")
+
+
+@app.get("/api/game/status")
+async def game_status(device_id: str = "aquabuzz-001", db: Session = Depends(get_db)):
+    """
+    PHASE 2B-2: Get current game and command state.
+    
+    Returns:
+    - active_run: Current game info or null
+    - pending_command: Command in progress or null
+    - device_online: Device heartbeat status
+    """
+    # Check for active run
+    active_run = db.query(Run).filter(
+        Run.device_id == device_id,
+        Run.status == "started",
+        Run.finished_at.is_(None)
+    ).first()
+    
+    # Check for pending command
+    pending_cmd = db.query(GameCommand).filter(
+        GameCommand.device_id == device_id,
+        GameCommand.status.in_(["pending", "sent"])
+    ).order_by(GameCommand.requested_at.desc()).first()
+    
+    # Check device status
+    device = db.query(Device).filter(Device.id == device_id).first()
+    device_online = False
+    if device and device.last_heartbeat:
+        time_since = (datetime.utcnow() - device.last_heartbeat).total_seconds()
+        device_online = time_since < 30
+    
+    # Build response
+    response = {
+        "device_id": device_id,
+        "device_online": device_online,
+        "active_run": None,
+        "pending_command": None
+    }
+    
+    if active_run:
+        # Count current hits
+        hit_count = db.query(Hit).filter(
+            Hit.run_uid == active_run.run_uid,
+            Hit.duration_ms > 0
+        ).count()
+        
+        response["active_run"] = {
+            "run_uid": active_run.run_uid,
+            "run_id": active_run.id,
+            "player_id": active_run.player_id,
+            "started_at": active_run.started_at.isoformat() if active_run.started_at else None,
+            "hits": hit_count
+        }
+    
+    if pending_cmd:
+        response["pending_command"] = {
+            "request_id": pending_cmd.request_id,
+            "command": pending_cmd.command,
+            "status": pending_cmd.status,
+            "requested_at": pending_cmd.requested_at.isoformat(),
+            "sent_at": pending_cmd.sent_at.isoformat() if pending_cmd.sent_at else None
+        }
+    
+    return response
+
+
+def detect_command_timeouts(db: Session, timeout_seconds: int = 5):
+    """
+    PHASE 2B-2: Detect and mark timed-out commands.
+    Called periodically by background task.
+    """
+    cutoff = datetime.utcnow() - timedelta(seconds=timeout_seconds)
+    
+    timed_out_commands = db.query(GameCommand).filter(
+        GameCommand.status == "sent",
+        GameCommand.sent_at < cutoff,
+        GameCommand.acknowledged_at.is_(None)
+    ).all()
+    
+    for cmd in timed_out_commands:
+        cmd.status = "timeout"
+        cmd.error_reason = f"No acknowledgment received within {timeout_seconds}s"
+        print(f"[GameControl] Command timeout: {cmd.request_id} ({cmd.command})")
+    
+    if timed_out_commands:
+        db.commit()
+    
+    return len(timed_out_commands)
+
+
+# ============================================================================
+# END PHASE 2B-2 ENDPOINTS
+# ============================================================================
 
 
 @app.get("/")
@@ -431,47 +773,121 @@ async def health(db: Session = Depends(get_db)):
     }
 
 
+@app.get("/api/active_run")
+async def get_active_run(db: Session = Depends(get_db)):
+    """
+    PHASE 2B-1: Get the currently active run for browser refresh recovery.
+    Returns the active run_uid and basic info, or null if no game is active.
+    """
+    active_run = db.query(Run).filter(
+        Run.status == "started",
+        Run.finished_at.is_(None)
+    ).order_by(Run.started_at.desc()).first()
+    
+    if not active_run:
+        return {
+            "active": False,
+            "run_uid": None,
+            "run_id": None
+        }
+    
+    # Count current hits
+    hit_count = db.query(Hit).filter(
+        Hit.run_uid == active_run.run_uid,
+        Hit.duration_ms > 0  # Only completed hits
+    ).count()
+    
+    return {
+        "active": True,
+        "run_uid": active_run.run_uid,
+        "run_id": active_run.id,
+        "player_id": active_run.player_id,
+        "started_at": active_run.started_at.isoformat(),
+        "hits": hit_count
+    }
+
+
 @app.get("/api/live")
 async def live_events():
     """
     FEAT-009: Server-Sent Events endpoint for real-time dashboard updates.
     Stream live game events to dashboard without polling.
+    
+    PHASE 2B-1: Fixed for reliability
+    - Uses asyncio.Queue instead of queue.Queue
+    - Proper async/await throughout
+    - Graceful client cleanup
+    - Event sequence IDs for debugging
+    - Improved keep-alive handling
     """
-    client_queue = queue.Queue(maxsize=100)
-    sse_clients.append(client_queue)
+    global sse_client_counter
+    sse_client_counter += 1
+    client_id = sse_client_counter
+    
+    # Create async queue for this client (larger size to prevent drops)
+    client_queue = asyncio.Queue(maxsize=200)
+    client_tuple = (client_id, client_queue)
+    sse_clients.append(client_tuple)
+    
+    print(f"[SSE] Client #{client_id} connected, {len(sse_clients)} total clients")
     
     async def event_generator():
+        """Generate SSE events for this client."""
+        event_sequence = 0
+        last_keepalive = time.time()
+        keepalive_interval = 15  # seconds
+        
         try:
             while True:
-                # Wait for event with timeout (30s keep-alive)
                 try:
+                    # Wait for event with timeout for keep-alive
                     event = await asyncio.wait_for(
-                        asyncio.to_thread(client_queue.get, timeout=30),
-                        timeout=31.0
+                        client_queue.get(),
+                        timeout=keepalive_interval
                     )
-                    # Send event to client
-                    yield f"data: {json.dumps(event)}\n\n"
+                    
+                    # Send real event
+                    event_sequence += 1
+                    event_data = json.dumps(event)
+                    
+                    # SSE format: id, event type (optional), data
+                    yield f"id: {event_sequence}\n"
+                    yield f"event: game_event\n"
+                    yield f"data: {event_data}\n\n"
+                    
+                    last_keepalive = time.time()
+                    
                 except asyncio.TimeoutError:
-                    # Send keep-alive comment
-                    yield f": keep-alive\n\n"
+                    # Send keep-alive comment (doesn't require id/event/data)
+                    current_time = time.time()
+                    if current_time - last_keepalive >= keepalive_interval:
+                        yield f": keepalive {int(current_time)}\n\n"
+                        last_keepalive = current_time
+                        
         except asyncio.CancelledError:
-            # Client disconnected
-            print("[SSE] Client disconnected")
+            # Client disconnected gracefully
+            print(f"[SSE] Client #{client_id} disconnected (cancelled)")
+            raise
+        except Exception as e:
+            # Unexpected error
+            print(f"[SSE] Client #{client_id} error: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
         finally:
-            # Clean up
-            if client_queue in sse_clients:
-                sse_clients.remove(client_queue)
-            print(f"[SSE] Client removed, {len(sse_clients)} clients remaining")
-    
-    print(f"[SSE] New client connected, {len(sse_clients)} total clients")
+            # Always clean up this client
+            if client_tuple in sse_clients:
+                sse_clients.remove(client_tuple)
+            print(f"[SSE] Client #{client_id} cleaned up, {len(sse_clients)} clients remaining")
     
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+            "Content-Type": "text/event-stream; charset=utf-8"
         }
     )
 

@@ -28,5 +28,5 @@ def get_db():
 
 def init_db():
     """Initialize database tables."""
-    from app.models import Player, Device, Run, Hit, Suggestion
+    from app.models import Player, Device, Run, Hit, Suggestion, GameCommand
     Base.metadata.create_all(bind=engine)

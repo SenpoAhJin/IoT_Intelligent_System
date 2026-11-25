@@ -288,6 +288,129 @@
             margin-bottom: 10px;
         }
         
+        /* PHASE 2A: Game Control Interface */
+        .game-control-card {
+            background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+            color: white;
+            border: 2px solid #60a5fa;
+        }
+        
+        .game-control-card h2 {
+            color: white;
+            border-bottom-color: rgba(255,255,255,0.3);
+        }
+        
+        .game-status {
+            text-align: center;
+            padding: 20px;
+            font-size: 1.5em;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        
+        .game-status-waiting {
+            color: #fbbf24;
+        }
+        
+        .game-status-running {
+            color: #10b981;
+            animation: pulse-status 1.5s ease-in-out infinite;
+        }
+        
+        .game-status-finished {
+            color: #3b82f6;
+        }
+        
+        @keyframes pulse-status {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        
+        .control-btn {
+            width: 100%;
+            padding: 20px;
+            font-size: 1.3em;
+            font-weight: bold;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: all 0.3s ease;
+            margin-top: 15px;
+        }
+        
+        .control-btn:hover:not(:disabled) {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+        }
+        
+        .control-btn:active:not(:disabled) {
+            transform: translateY(-1px);
+        }
+        
+        .control-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .btn-start {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+        }
+        
+        .btn-finish {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: white;
+        }
+        
+        .btn-new-game {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            color: white;
+        }
+        
+        .game-metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .metric-box {
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .metric-label {
+            font-size: 0.9em;
+            opacity: 0.8;
+            margin-bottom: 8px;
+        }
+        
+        .metric-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .integration-notice {
+            background: rgba(251, 191, 36, 0.2);
+            border: 2px solid #fbbf24;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+            text-align: center;
+            font-size: 0.95em;
+        }
+        
+        .integration-notice-icon {
+            font-size: 1.5em;
+            margin-bottom: 5px;
+        }
+        
         @media (max-width: 768px) {
             .grid, .grid-2col {
                 grid-template-columns: 1fr;
@@ -295,6 +418,15 @@
             
             h1 {
                 font-size: 1.8em;
+            }
+            
+            .control-btn {
+                padding: 18px;
+                font-size: 1.1em;
+            }
+            
+            .game-metrics {
+                grid-template-columns: repeat(2, 1fr);
             }
         }
     </style>
@@ -307,6 +439,55 @@
         <button class="refresh-btn" onclick="loadData()">🔄 Refresh Now</button>
         
         <div class="alert" id="status-alert" style="display: none;"></div>
+        
+        <!-- PHASE 2A: Game Control Interface -->
+        <div class="card game-control-card">
+            <h2>🎮 Game Control</h2>
+            
+            <div class="game-status" id="game-status">
+                <span class="game-status-waiting">⏸ WAITING</span>
+            </div>
+            
+            <div id="game-metrics-container" style="display: none;">
+                <div class="game-metrics">
+                    <div class="metric-box">
+                        <div class="metric-label">Elapsed Time</div>
+                        <div class="metric-value" id="metric-time">0.0s</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-label">Total Hits</div>
+                        <div class="metric-value" id="metric-hits">0</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-label">Contact Time</div>
+                        <div class="metric-value" id="metric-contact">0.0s</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-label">Longest Hit</div>
+                        <div class="metric-value" id="metric-longest">0ms</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="final-score-container" style="display: none;">
+                <div class="metric-box" style="margin: 20px 0;">
+                    <div class="metric-label">Final Score</div>
+                    <div class="metric-value" id="metric-score" style="font-size: 2.5em; color: #fbbf24;">0.0s</div>
+                </div>
+            </div>
+            
+            <button id="btn-start-game" class="control-btn btn-start" onclick="handleStartGame()">
+                🚀 START GAME
+            </button>
+            
+            <button id="btn-finish-game" class="control-btn btn-finish" onclick="handleFinishGame()" style="display: none;">
+                🏁 FINISH GAME
+            </button>
+            
+            <button id="btn-new-game" class="control-btn btn-new-game" onclick="handleNewGame()" style="display: none;">
+                🔄 START NEW GAME
+            </button>
+        </div>
         
         <!-- Live Game Status -->
         <div class="card card-live game-active" id="live-game-card" style="display: none;">
@@ -353,6 +534,11 @@
         
         let activeRuns = [];
         
+        // PHASE 1.3: Active run tracking for display priority
+        let activeRunUid = null;      // Currently active game (null when finished)
+        let displayedRunUid = null;   // Run currently shown in details (persists after finish)
+        let lastApiRequestTime = 0;   // Prevents stale API responses from overwriting newer data
+        
         // FEAT-004: Dashboard latency measurement
         let lastEventTimestamp = null;
         let latencyStats = {
@@ -363,56 +549,131 @@
         // FEAT-009: Server-Sent Events for real-time updates
         let eventSource = null;
         let sseReconnectAttempts = 0;
-        const SSE_MAX_RECONNECT_ATTEMPTS = 3;
+        const SSE_MAX_RECONNECT_ATTEMPTS = 5;
         let useSseUpdates = true;  // Try SSE first, fallback to polling if it fails
+        let lastEventId = null;  // Track event sequence for debugging
+        let sseConnected = false;  // Track connection state
+        
+        // PHASE 2A: Game control state
+        let gameControlState = 'WAITING';  // WAITING | RUNNING | FINISHED
+        let gameControlMetrics = {
+            startTime: null,
+            elapsedMs: 0,
+            hits: 0,
+            contactMs: 0,
+            longestHitMs: 0,
+            finalScore: 0
+        };
+        let gameControlTimer = null;
         
         function connectSSE() {
-            if (!useSseUpdates) return;
+            if (!useSseUpdates) {
+                console.log('[SSE] SSE disabled, using polling only');
+                return;
+            }
             
             try {
                 console.log('[SSE] Connecting to live events stream...');
-                eventSource = new EventSource(`${API_BASE}/live`);
+                
+                // Build SSE URL with Last-Event-ID if we have one (for reconnection)
+                let sseUrl = `${API_BASE}/live`;
+                
+                eventSource = new EventSource(sseUrl);
                 
                 eventSource.onopen = () => {
-                    console.log('[SSE] Connected to live events stream');
+                    console.log('[SSE] ✓ Connected to live events stream');
+                    sseConnected = true;
                     sseReconnectAttempts = 0;
+                    
+                    // Clear any connection error alerts
+                    const alert = document.getElementById('status-alert');
+                    if (alert && alert.textContent.includes('SSE')) {
+                        alert.style.display = 'none';
+                    }
                 };
                 
                 eventSource.onmessage = (event) => {
                     try {
+                        // Store event ID for reconnection
+                        if (event.lastEventId) {
+                            lastEventId = event.lastEventId;
+                        }
+                        
                         const data = JSON.parse(event.data);
+                        console.log('[SSE] Received event:', data);
                         handleLiveEvent(data);
                     } catch (err) {
-                        console.error('[SSE] Error parsing event:', err);
+                        console.error('[SSE] Error parsing event:', err, event.data);
                     }
                 };
                 
-                eventSource.onerror = (error) => {
-                    console.error('[SSE] Connection error:', error);
-                    eventSource.close();
-                    
-                    sseReconnectAttempts++;
-                    
-                    if (sseReconnectAttempts >= SSE_MAX_RECONNECT_ATTEMPTS) {
-                        console.log('[SSE] Max reconnection attempts reached, falling back to polling only');
-                        useSseUpdates = false;
-                        return;
+                // Specific event types (if backend sends them)
+                eventSource.addEventListener('game_event', (event) => {
+                    try {
+                        if (event.lastEventId) {
+                            lastEventId = event.lastEventId;
+                        }
+                        const data = JSON.parse(event.data);
+                        console.log('[SSE] Received game_event:', data);
+                        handleLiveEvent(data);
+                    } catch (err) {
+                        console.error('[SSE] Error parsing game_event:', err);
                     }
+                });
+                
+                eventSource.onerror = (error) => {
+                    console.error('[SSE] Connection error, readyState:', eventSource.readyState);
+                    sseConnected = false;
                     
-                    // Exponential backoff reconnection
-                    const delay = Math.min(1000 * Math.pow(2, sseReconnectAttempts), 10000);
-                    console.log(`[SSE] Reconnecting in ${delay}ms...`);
-                    setTimeout(connectSSE, delay);
+                    // ReadyState: 0=CONNECTING, 1=OPEN, 2=CLOSED
+                    if (eventSource.readyState === EventSource.CLOSED) {
+                        console.log('[SSE] Connection closed by server');
+                        eventSource.close();
+                        
+                        sseReconnectAttempts++;
+                        
+                        if (sseReconnectAttempts >= SSE_MAX_RECONNECT_ATTEMPTS) {
+                            console.log('[SSE] Max reconnection attempts reached, falling back to polling only');
+                            useSseUpdates = false;
+                            showAlert('Live updates unavailable, using polling mode', 'warning');
+                            return;
+                        }
+                        
+                        // Exponential backoff reconnection
+                        const delay = Math.min(2000 * Math.pow(1.5, sseReconnectAttempts), 30000);
+                        console.log(`[SSE] Reconnecting in ${delay}ms (attempt ${sseReconnectAttempts}/${SSE_MAX_RECONNECT_ATTEMPTS})...`);
+                        setTimeout(connectSSE, delay);
+                    }
                 };
             } catch (err) {
                 console.error('[SSE] Failed to create EventSource:', err);
                 useSseUpdates = false;
+                showAlert('SSE connection failed, using polling mode', 'warning');
             }
         }
         
         function handleLiveEvent(event) {
             const eventType = event.event;
+            const runUid = event.run_uid;
+            
             console.log(`[SSE] Received ${eventType} event:`, event);
+            
+            // PHASE 2B-2: Handle command acknowledgments
+            if (eventType === 'command_ack') {
+                handleCommandAck(event);
+                return;
+            }
+            
+            // PHASE 1.3: Track active run lifecycle for display priority
+            if (eventType === 'run_start') {
+                activeRunUid = runUid;
+                displayedRunUid = runUid;  // Immediately switch to new game
+                console.log(`[SSE] Active run started: ${activeRunUid}`);
+            } else if (eventType === 'run_finish' || eventType === 'run_cancel') {
+                console.log(`[SSE] Run ${activeRunUid} completed (${eventType})`);
+                activeRunUid = null;  // No longer active
+                // Keep displayedRunUid - completed game stays visible until next run_start
+            }
             
             // FEAT-009: Trigger immediate refresh on key events
             if (eventType === 'hit_start' || eventType === 'hit_end' || 
@@ -454,6 +715,42 @@
             
             // FEAT-004: Console logging for debugging
             console.log(`[Dashboard] API fetch: ${apiFetchMs.toFixed(1)}ms, render: ${renderMs.toFixed(1)}ms`);
+            
+            // PHASE 2A: Sync game control UI with active run state
+            syncGameControlWithActiveRun();
+        }
+        
+        async function recoverActiveRunAfterRefresh() {
+            /**
+             * PHASE 2B-1: Browser refresh recovery
+             * Query backend for the currently active run and restore tracking state
+             */
+            try {
+                console.log('[Recovery] Checking for active run after browser refresh...');
+                const res = await fetch(`${API_BASE}/active_run`);
+                const data = await res.json();
+                
+                if (data.active && data.run_uid) {
+                    console.log(`[Recovery] ✓ Active run found: ${data.run_uid}`);
+                    activeRunUid = data.run_uid;
+                    displayedRunUid = data.run_uid;
+                    
+                    // Load the active run details immediately
+                    if (data.run_id) {
+                        await loadRunDetails(data.run_id);
+                    }
+                    
+                    return true;
+                } else {
+                    console.log('[Recovery] No active run, loading latest finished run');
+                    activeRunUid = null;
+                    // displayedRunUid will be set by loadRecentRuns to latest finished
+                    return false;
+                }
+            } catch (err) {
+                console.error('[Recovery] Error checking for active run:', err);
+                return false;
+            }
         }
         
         async function loadHealth() {
@@ -570,6 +867,9 @@
         }
         
         async function loadRecentRuns() {
+            // PHASE 1.3: Capture request time for race condition protection
+            const requestTime = performance.now();
+            
             try {
                 const res = await fetch(`${API_BASE}/runs?limit=10`);
                 const data = await res.json();
@@ -608,10 +908,57 @@
                 
                 document.getElementById('recent-runs').innerHTML = html;
                 
-                // Show details for most recent completed run
-                const latestFinished = data.find(r => r.status === 'finished');
-                if (latestFinished) {
-                    loadRunDetails(latestFinished.id);
+                // PHASE 1.3: Prioritize active game, preserve displayed game, fall back to latest finished
+                let runToDisplay = null;
+                let displayReason = '';
+                
+                // Priority 1: Active game (currently in progress)
+                if (activeRunUid) {
+                    runToDisplay = data.find(r => r.run_uid === activeRunUid);
+                    if (runToDisplay) {
+                        displayReason = `active game (${activeRunUid})`;
+                        displayedRunUid = activeRunUid;  // Update displayed reference
+                    } else {
+                        console.log(`[Dashboard] Active run ${activeRunUid} not yet in API response, keeping current display`);
+                        // Don't clear activeRunUid - run might just not be in DB yet
+                    }
+                }
+                
+                // Priority 2: Previously displayed run (keep showing until new game starts)
+                if (!runToDisplay && displayedRunUid) {
+                    runToDisplay = data.find(r => r.run_uid === displayedRunUid);
+                    if (runToDisplay) {
+                        displayReason = `previously displayed (${displayedRunUid}, ${runToDisplay.status})`;
+                        
+                        // Clear stale activeRunUid if displayed run is finished (handle missed run_finish)
+                        if (activeRunUid === displayedRunUid && runToDisplay.status === 'finished') {
+                            console.log(`[Dashboard] Clearing stale activeRunUid - run ${activeRunUid} is finished`);
+                            activeRunUid = null;
+                        }
+                    } else {
+                        console.log(`[Dashboard] Previously displayed run ${displayedRunUid} no longer in recent runs`);
+                        displayedRunUid = null;  // Clear stale reference
+                    }
+                }
+                
+                // Priority 3: Latest finished run (fallback when no active or displayed run)
+                if (!runToDisplay) {
+                    runToDisplay = data.find(r => r.status === 'finished');
+                    if (runToDisplay) {
+                        displayReason = `latest finished (${runToDisplay.run_uid})`;
+                        displayedRunUid = runToDisplay.run_uid;  // Remember what we're showing
+                    }
+                }
+                
+                // Apply display if we have a run and this isn't a stale request
+                if (runToDisplay) {
+                    if (requestTime >= lastApiRequestTime) {
+                        console.log(`[Dashboard] Displaying ${displayReason}`);
+                        loadRunDetails(runToDisplay.id);
+                        lastApiRequestTime = requestTime;
+                    } else {
+                        console.log(`[Dashboard] Ignoring stale API request (${requestTime.toFixed(1)} < ${lastApiRequestTime.toFixed(1)})`);
+                    }
                 }
             } catch (err) {
                 document.getElementById('recent-runs').innerHTML = '<div class="empty-state">Error loading runs</div>';
@@ -747,14 +1094,353 @@
             }
         }
         
+        /**
+         * PHASE 2B-1: Show alert message to user
+         */
+        function showAlert(message, type = 'info') {
+            const alert = document.getElementById('status-alert');
+            alert.textContent = message;
+            alert.className = `alert alert-${type}`;
+            alert.style.display = 'block';
+            
+            // Auto-hide after 5 seconds for non-error messages
+            if (type !== 'error') {
+                setTimeout(() => {
+                    alert.style.display = 'none';
+                }, 5000);
+            }
+        }
+        
         // Start adaptive polling
         intervalId = setInterval(loadData, pollInterval);
         
         // FEAT-009: Connect to SSE for real-time updates
         connectSSE();
         
-        // Initial load
-        loadData();
+        // PHASE 2B-1: Initial load with browser refresh recovery
+        (async () => {
+            console.log('[Dashboard] Initializing...');
+            
+            // First, try to recover active run state after browser refresh
+            await recoverActiveRunAfterRefresh();
+            
+            // Then load all dashboard data
+            await loadData();
+            
+            console.log('[Dashboard] Initialization complete');
+        })();
+        
+        // ============================================================================
+        // PHASE 2B-2: GAME CONTROL FUNCTIONS - BACKEND INTEGRATION
+        // ============================================================================
+        
+        // Track pending command state
+        let pendingCommand = null;  // { request_id, command, timestamp }
+        
+        /**
+         * PHASE 2B-2: Handle START GAME button click
+         * Sends command to backend → MQTT → Serial Gateway → ESP32
+         */
+        async function handleStartGame() {
+            console.log('[GameControl] START GAME requested');
+            
+            if (pendingCommand) {
+                console.log('[GameControl] Command already pending, ignoring');
+                return;
+            }
+            
+            // Update UI to show pending state
+            updateGameControls('STARTING');
+            
+            try {
+                const response = await fetch(`${API_BASE}/game/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        device_id: 'aquabuzz-001',
+                        player_id: 'guest'
+                    })
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to start game');
+                }
+                
+                const result = await response.json();
+                console.log('[GameControl] START command sent:', result);
+                
+                // Track pending command
+                pendingCommand = {
+                    request_id: result.request_id,
+                    command: 'start',
+                    timestamp: Date.now()
+                };
+                
+                // Set timeout for command acknowledgment
+                setTimeout(() => checkCommandTimeout(), 7000);  // 7s timeout (5s device + 2s buffer)
+                
+            } catch (error) {
+                console.error('[GameControl] START command failed:', error);
+                updateGameControls('ERROR', { error: error.message });
+                showAlert(`Failed to start game: ${error.message}`, 'error');
+            }
+        }
+        
+        /**
+         * PHASE 2B-2: Handle FINISH GAME button click
+         * Sends command to backend → MQTT → Serial Gateway → ESP32
+         */
+        async function handleFinishGame() {
+            console.log('[GameControl] FINISH GAME requested');
+            
+            if (pendingCommand) {
+                console.log('[GameControl] Command already pending, ignoring');
+                return;
+            }
+            
+            // Update UI to show pending state
+            updateGameControls('FINISHING');
+            
+            try {
+                const response = await fetch(`${API_BASE}/game/finish`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        device_id: 'aquabuzz-001'
+                    })
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to finish game');
+                }
+                
+                const result = await response.json();
+                console.log('[GameControl] FINISH command sent:', result);
+                
+                // Track pending command
+                pendingCommand = {
+                    request_id: result.request_id,
+                    command: 'finish',
+                    timestamp: Date.now()
+                };
+                
+                // Set timeout for command acknowledgment
+                setTimeout(() => checkCommandTimeout(), 7000);  // 7s timeout
+                
+            } catch (error) {
+                console.error('[GameControl] FINISH command failed:', error);
+                updateGameControls('ERROR', { error: error.message });
+                showAlert(`Failed to finish game: ${error.message}`, 'error');
+            }
+        }
+        
+        /**
+         * PHASE 2B-2: Check for command timeout
+         */
+        function checkCommandTimeout() {
+            if (pendingCommand) {
+                const elapsed = Date.now() - pendingCommand.timestamp;
+                console.error(`[GameControl] Command timeout: ${pendingCommand.command} (${elapsed}ms)`);
+                
+                updateGameControls('ERROR', { 
+                    error: `Command timeout - ESP32 not responding (${pendingCommand.command})` 
+                });
+                showAlert(`Command timeout - ESP32 may be disconnected`, 'error');
+                
+                pendingCommand = null;
+            }
+        }
+        
+        /**
+         * Handle NEW GAME button click (after game finished)
+         */
+        function handleNewGame() {
+            console.log('[GameControl] NEW GAME requested');
+            handleStartGame();  // Same as START GAME
+        }
+        
+        /**
+         * PHASE 2B-2: Update game control UI based on current state
+         * States: WAITING, STARTING, RUNNING, FINISHING, FINISHED, ERROR
+         */
+        function updateGameControls(state, metrics = null) {
+            console.log(`[GameControl] Updating UI to state: ${state}`, metrics);
+            
+            gameControlState = state;
+            
+            const statusEl = document.getElementById('game-status');
+            const metricsContainer = document.getElementById('game-metrics-container');
+            const scoreContainer = document.getElementById('final-score-container');
+            const btnStart = document.getElementById('btn-start-game');
+            const btnFinish = document.getElementById('btn-finish-game');
+            const btnNew = document.getElementById('btn-new-game');
+            
+            if (state === 'WAITING') {
+                statusEl.innerHTML = '<span class="game-status-waiting">⏸ WAITING</span>';
+                metricsContainer.style.display = 'none';
+                scoreContainer.style.display = 'none';
+                btnStart.style.display = 'block';
+                btnStart.disabled = false;
+                btnFinish.style.display = 'none';
+                btnNew.style.display = 'none';
+                
+                // Stop timer if running
+                if (gameControlTimer) {
+                    clearInterval(gameControlTimer);
+                    gameControlTimer = null;
+                }
+                
+            } else if (state === 'STARTING') {
+                statusEl.innerHTML = '<span class="game-status-waiting">⏳ STARTING...</span>';
+                btnStart.disabled = true;
+                btnFinish.style.display = 'none';
+                btnNew.style.display = 'none';
+                
+            } else if (state === 'RUNNING') {
+                statusEl.innerHTML = '<span class="game-status-running">🔴 RUNNING</span>';
+                metricsContainer.style.display = 'block';
+                scoreContainer.style.display = 'none';
+                btnStart.style.display = 'none';
+                btnFinish.style.display = 'block';
+                btnFinish.disabled = false;
+                btnNew.style.display = 'none';
+                
+                // Clear pending command on successful start
+                pendingCommand = null;
+                
+                // Start metrics timer
+                if (metrics && metrics.startTime) {
+                    gameControlMetrics.startTime = metrics.startTime;
+                    startGameControlTimer();
+                }
+                
+            } else if (state === 'FINISHING') {
+                statusEl.innerHTML = '<span class="game-status-running">⏳ FINISHING...</span>';
+                btnFinish.disabled = true;
+                
+            } else if (state === 'FINISHED') {
+                statusEl.innerHTML = '<span class="game-status-finished">✅ FINISHED</span>';
+                metricsContainer.style.display = 'block';
+                scoreContainer.style.display = 'block';
+                btnStart.style.display = 'none';
+                btnFinish.style.display = 'none';
+                btnNew.style.display = 'block';
+                btnNew.disabled = false;
+                
+                // Clear pending command on successful finish
+                pendingCommand = null;
+                
+                // Stop timer
+                if (gameControlTimer) {
+                    clearInterval(gameControlTimer);
+                    gameControlTimer = null;
+                }
+                
+                // Update final metrics
+                if (metrics) {
+                    updateGameMetricsDisplay(metrics);
+                }
+                
+            } else if (state === 'ERROR') {
+                statusEl.innerHTML = '<span class="game-status-waiting">❌ ERROR</span>';
+                btnStart.style.display = 'block';
+                btnStart.disabled = false;
+                btnFinish.style.display = 'none';
+                btnNew.style.display = 'none';
+                
+                // Clear pending command on error
+                pendingCommand = null;
+                
+                if (metrics && metrics.error) {
+                    console.error('[GameControl] Error:', metrics.error);
+                }
+            }
+        }
+        
+        /**
+         * Start the game control timer (for elapsed time display)
+         */
+        function startGameControlTimer() {
+            if (gameControlTimer) clearInterval(gameControlTimer);
+            
+            gameControlTimer = setInterval(() => {
+                if (gameControlMetrics.startTime) {
+                    gameControlMetrics.elapsedMs = Date.now() - gameControlMetrics.startTime;
+                    updateGameMetricsDisplay(gameControlMetrics);
+                }
+            }, 100);  // Update every 100ms for smooth timer
+        }
+        
+        /**
+         * Update the game metrics display
+         */
+        function updateGameMetricsDisplay(metrics) {
+            document.getElementById('metric-time').textContent = 
+                (metrics.elapsedMs / 1000).toFixed(1) + 's';
+            
+            document.getElementById('metric-hits').textContent = 
+                metrics.hits || 0;
+            
+            document.getElementById('metric-contact').textContent = 
+                ((metrics.contactMs || 0) / 1000).toFixed(2) + 's';
+            
+            document.getElementById('metric-longest').textContent = 
+                (metrics.longestHitMs || 0).toFixed(0) + 'ms';
+            
+            if (metrics.finalScore) {
+                document.getElementById('metric-score').textContent = 
+                    (metrics.finalScore / 1000).toFixed(2) + 's';
+            }
+        }
+        
+        /**
+         * PHASE 2B-2: Handle command acknowledgment from SSE
+         */
+        function handleCommandAck(ackEvent) {
+            console.log('[GameControl] Command ACK received:', ackEvent);
+            
+            if (!pendingCommand || ackEvent.request_id !== pendingCommand.request_id) {
+                console.log('[GameControl] ACK for different/no pending command, ignoring');
+                return;
+            }
+            
+            if (ackEvent.status === 'acknowledged') {
+                console.log(`[GameControl] Command ${pendingCommand.command} acknowledged successfully`);
+                // State will transition via run_start/run_finish events
+                pendingCommand = null;
+            } else if (ackEvent.status === 'rejected' || ackEvent.status === 'timeout') {
+                console.error(`[GameControl] Command ${pendingCommand.command} ${ackEvent.status}`);
+                updateGameControls('ERROR', { 
+                    error: `Command ${ackEvent.status}: ${ackEvent.error_reason || 'Unknown error'}` 
+                });
+                showAlert(`Command ${ackEvent.status}`, 'error');
+                pendingCommand = null;
+            }
+        }
+        
+        /**
+         * PHASE 2B-2: Sync game control state with existing game monitoring
+         * This bridges the new controls with the existing active run tracking
+         */
+        function syncGameControlWithActiveRun() {
+            // Synchronize dashboard game control UI with backend active run state
+            if (activeRunUid && (gameControlState === 'WAITING' || gameControlState === 'ERROR')) {
+                console.log('[GameControl] Syncing with active run:', activeRunUid);
+                updateGameControls('RUNNING', {
+                    startTime: Date.now() - 5000  // Approximate, will sync with real data
+                });
+            } else if (!activeRunUid && gameControlState === 'RUNNING') {
+                console.log('[GameControl] Active run finished, returning to WAITING');
+                updateGameControls('FINISHED', gameControlMetrics);
+                // After showing finished state, return to waiting after delay
+                setTimeout(() => {
+                    if (!activeRunUid) updateGameControls('WAITING');
+                }, 3000);
+            }
+        }
+    
     </script>
 </body>
 </html>

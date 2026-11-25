@@ -43,7 +43,11 @@ class MQTTEventIngester:
             # Subscribe to all device events
             client.subscribe("aquabuzz/+/events")
             client.subscribe("aquabuzz/+/heartbeat")
-            print("[MQTT] Subscribed to aquabuzz/+/events and heartbeats")
+            
+            # PHASE 2B-2: Subscribe to command acknowledgments
+            client.subscribe("aquabuzz/+/ack")
+            
+            print("[MQTT] Subscribed to aquabuzz/+/events, heartbeats, and acks")
         else:
             print(f"[MQTT] Connection failed with code {rc}")
             self.connected = False
