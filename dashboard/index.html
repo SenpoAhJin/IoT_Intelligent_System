@@ -1136,6 +1136,7 @@
         
         // Track pending command state
         let pendingCommand = null;  // { request_id, command, timestamp }
+        let commandClickLock = false;  // PHASE 2B-2: Prevent duplicate clicks
         
         /**
          * PHASE 2B-2: Handle START GAME button click
@@ -1144,12 +1145,16 @@
         async function handleStartGame() {
             console.log('[GameControl] START GAME requested');
             
-            if (pendingCommand) {
-                console.log('[GameControl] Command already pending, ignoring');
+            // Click protection
+            if (commandClickLock || pendingCommand) {
+                console.log('[GameControl] Duplicate click ignored (locked or pending)');
                 return;
             }
             
-            // Update UI to show pending state
+            // Immediate click lock
+            commandClickLock = true;
+            
+            // Immediate UI update
             updateGameControls('STARTING');
             
             try {
@@ -1184,6 +1189,9 @@
                 console.error('[GameControl] START command failed:', error);
                 updateGameControls('ERROR', { error: error.message });
                 showAlert(`Failed to start game: ${error.message}`, 'error');
+            } finally {
+                // Release click lock after a delay to prevent rapid double-clicks
+                setTimeout(() => { commandClickLock = false; }, 500);
             }
         }
         
@@ -1194,12 +1202,16 @@
         async function handleFinishGame() {
             console.log('[GameControl] FINISH GAME requested');
             
-            if (pendingCommand) {
-                console.log('[GameControl] Command already pending, ignoring');
+            // Click protection
+            if (commandClickLock || pendingCommand) {
+                console.log('[GameControl] Duplicate click ignored (locked or pending)');
                 return;
             }
             
-            // Update UI to show pending state
+            // Immediate click lock
+            commandClickLock = true;
+            
+            // Immediate UI update
             updateGameControls('FINISHING');
             
             try {
@@ -1233,6 +1245,9 @@
                 console.error('[GameControl] FINISH command failed:', error);
                 updateGameControls('ERROR', { error: error.message });
                 showAlert(`Failed to finish game: ${error.message}`, 'error');
+            } finally {
+                // Release click lock after a delay
+                setTimeout(() => { commandClickLock = false; }, 500);
             }
         }
         
@@ -1423,21 +1438,57 @@
         /**
          * PHASE 2B-2: Sync game control state with existing game monitoring
          * This bridges the new controls with the existing active run tracking
+         * USES EVENTS NOT API POLLING - state comes from SSE run_start/run_finish
          */
         function syncGameControlWithActiveRun() {
-            // Synchronize dashboard game control UI with backend active run state
-            if (activeRunUid && (gameControlState === 'WAITING' || gameControlState === 'ERROR')) {
-                console.log('[GameControl] Syncing with active run:', activeRunUid);
+            // Don't query API here - let SSE events drive state
+            
+            // Active game detected
+            if (activeRunUid && (gameControlState === 'WAITING' || gameControlState === 'ERROR' || gameControlState === 'FINISHED')) {
+                console.log('[GameControl] Active run detected, transitioning to RUNNING:', activeRunUid);
                 updateGameControls('RUNNING', {
-                    startTime: Date.now() - 5000  // Approximate, will sync with real data
+                    startTime: Date.now() - 2000  // Approximate, actual metrics come from API
                 });
-            } else if (!activeRunUid && gameControlState === 'RUNNING') {
-                console.log('[GameControl] Active run finished, returning to WAITING');
-                updateGameControls('FINISHED', gameControlMetrics);
-                // After showing finished state, return to waiting after delay
+            }
+            // Game finished
+            else if (!activeRunUid && (gameControlState === 'RUNNING' || gameControlState === 'FINISHING')) {
+                console.log('[GameControl] No active run, game finished');
+                // Load final metrics before transitioning
+                if (displayedRunUid) {
+                    // Find the finished run in recent runs
+                    fetch(`${API_BASE}/runs?limit=10`)
+                        .then(res => res.json())
+                        .then(runs => {
+                            const finishedRun = runs.find(r => r.run_uid === displayedRunUid && r.status === 'finished');
+                            if (finishedRun) {
+                                updateGameControls('FINISHED', {
+                                    elapsedMs: finishedRun.duration_ms,
+                                    hits: finishedRun.hits,
+                                    contactMs: finishedRun.total_contact_ms,
+                                    longestHitMs: finishedRun.longest_hit_ms,
+                                    finalScore: finishedRun.score
+                                });
+                            } else {
+                                updateGameControls('FINISHED');
+                            }
+                        })
+                        .catch(err => {
+                            console.error('[GameControl] Error loading final metrics:', err);
+                            updateGameControls('FINISHED');
+                        });
+                }
+                
+                // Return to WAITING after showing finished state
                 setTimeout(() => {
-                    if (!activeRunUid) updateGameControls('WAITING');
-                }, 3000);
+                    if (!activeRunUid && gameControlState === 'FINISHED') {
+                        updateGameControls('WAITING');
+                    }
+                }, 5000);
+            }
+            // Pending command cleared but no state change yet - remain in transition state
+            else if (!pendingCommand && (gameControlState === 'STARTING' || gameControlState === 'FINISHING')) {
+                // This is normal - wait for actual run_start/run_finish event
+                console.log('[GameControl] Command processed, waiting for game event...');
             }
         }
     

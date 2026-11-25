@@ -66,6 +66,7 @@ class SerialGateway:
         self.command_queue = queue.Queue(maxsize=10)  # Command queue for serial transmission
         self.pending_commands = {}  # cmd_id → {"sent_at": time, "timeout": 5.0, "command": {...}}
         self.command_timeout_seconds = 5.0
+        self.command_thread = None  # Dedicated command worker thread
         
         print(f"[Gateway] Session ID: {self.gateway_session_id}")
         
@@ -389,57 +390,86 @@ class SerialGateway:
             # Publish immediate failure
             self.publish_command_ack(command_data['request_id'], command_data['command'], "error", "Queue full")
     
+    def command_worker_loop(self):
+        """
+        PHASE 2B-2: Dedicated thread for immediate command transmission.
+        Separates command sending from serial reading for lower latency.
+        """
+        print("[Command] Worker thread started")
+        
+        while self.running:
+            try:
+                # Block with timeout for clean shutdown
+                command_data = self.command_queue.get(timeout=0.5)
+                
+                if not command_data:
+                    continue
+                
+                # Generate cmd_id for acknowledgment tracking
+                cmd_id = f"{command_data['command']}-{command_data['timestamp']}"
+                
+                # Build serial command JSON with cmd_id
+                serial_cmd = {
+                    "cmd": command_data['command'],
+                    "cmd_id": cmd_id,
+                    "t": command_data['timestamp']
+                }
+                
+                # Add optional fields
+                if command_data.get('player_id'):
+                    serial_cmd['player_id'] = command_data['player_id']
+                
+                if command_data.get('run_uid'):
+                    serial_cmd['run_uid'] = command_data['run_uid']
+                
+                # Send to ESP32 via serial
+                if self.serial_port and self.serial_port.is_open:
+                    cmd_json = json.dumps(serial_cmd) + "\n"
+                    
+                    try:
+                        self.serial_port.write(cmd_json.encode('utf-8'))
+                        print(f"[Command] Sent to ESP32: {cmd_json.strip()}")
+                        
+                        # Track for acknowledgment
+                        self.pending_commands[cmd_id] = {
+                            "sent_at": time.time(),
+                            "timeout": self.command_timeout_seconds,
+                            "command": command_data,
+                            "request_id": command_data['request_id']
+                        }
+                    except Exception as e:
+                        print(f"[Command] Serial write error: {e}")
+                        self.publish_command_ack(
+                            command_data['request_id'],
+                            command_data['command'],
+                            "error",
+                            f"Serial write failed: {str(e)}"
+                        )
+                else:
+                    print(f"[Command] Cannot send, serial not connected")
+                    self.publish_command_ack(
+                        command_data['request_id'],
+                        command_data['command'],
+                        "error",
+                        "Serial port not connected"
+                    )
+                
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"[Command] Worker error: {e}")
+                time.sleep(0.1)
+        
+        print("[Command] Worker thread stopped")
+    
     def send_command(self, command_data: dict):
         """
-        PHASE 2B-2: Send command to ESP32 via serial.
-        
-        Protocol (compatible with future firmware):
-        {"cmd":"start","t":1234567890}\n
-        {"cmd":"finish","t":1234567890}\n
+        PHASE 2B-2: DEPRECATED - Command sending now happens in dedicated worker thread.
+        This method is kept for backward compatibility but should not be called directly.
+        Use queue_command() instead.
         """
-        if not self.serial_port or not self.serial_port.is_open:
-            print(f"[Command] ERROR: Cannot send command, serial not connected")
-            self.publish_command_ack(
-                command_data['request_id'],
-                command_data['command'],
-                "error",
-                "Serial port not connected"
-            )
-            return False
-        
-        try:
-            # Build serial command message
-            serial_cmd = {
-                "cmd": command_data['command'],
-                "t": command_data['timestamp']
-            }
-            
-            cmd_json = json.dumps(serial_cmd) + "\n"
-            
-            # Write to serial (non-blocking)
-            self.serial_port.write(cmd_json.encode('utf-8'))
-            print(f"[Command] Sent to ESP32: {cmd_json.strip()}")
-            
-            # Track for acknowledgment/timeout
-            cmd_id = f"{command_data['command']}-{command_data['timestamp']}"
-            self.pending_commands[cmd_id] = {
-                "sent_at": time.time(),
-                "timeout": self.command_timeout_seconds,
-                "command": command_data,
-                "request_id": command_data['request_id']
-            }
-            
-            return True
-            
-        except Exception as e:
-            print(f"[Command] ERROR sending to ESP32: {e}")
-            self.publish_command_ack(
-                command_data['request_id'],
-                command_data['command'],
-                "error",
-                f"Serial write failed: {str(e)}"
-            )
-            return False
+        print("[Command] WARNING: send_command() called directly, use queue_command() instead")
+        self.queue_command(command_data)
     
     def handle_command_acknowledgment(self, ack_data: dict):
         """
@@ -647,15 +677,8 @@ class SerialGateway:
                     except Exception as e:
                         print(f"[Serial] Read error: {e}")
                 
-                # PHASE 2B-2: Process command queue (non-blocking)
-                try:
-                    while not self.command_queue.empty():
-                        command_data = self.command_queue.get_nowait()
-                        self.send_command(command_data)
-                except queue.Empty:
-                    pass
-                except Exception as e:
-                    print(f"[Command] Error processing queue: {e}")
+                # PHASE 2B-2: Command queue processing moved to dedicated thread
+                # (Removed - now handled by command_worker_loop)
                 
                 # PHASE 2B-2: Check for command timeouts every iteration
                 self.check_command_timeouts()
@@ -708,6 +731,10 @@ class SerialGateway:
         # Start heartbeat thread
         self.heartbeat_thread = threading.Thread(target=self.heartbeat_loop, daemon=True)
         self.heartbeat_thread.start()
+        
+        # PHASE 2B-2: Start command worker thread for immediate command transmission
+        self.command_thread = threading.Thread(target=self.command_worker_loop, daemon=True)
+        self.command_thread.start()
         
         # Start reading loop
         try:

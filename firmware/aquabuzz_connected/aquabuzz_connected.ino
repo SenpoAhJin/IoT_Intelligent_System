@@ -54,6 +54,10 @@ String playerId = "guest";
 int hitCount = 0;
 Hit hits[100];
 
+// PHASE 2B-2: JSON command parsing state
+String serialCommandBuffer = "";
+const int MAX_COMMAND_LENGTH = 256;
+
 // Contact tracking
 bool mazePressed = false;
 bool finishPressed = false;
@@ -249,38 +253,221 @@ void onFinishPressed() {
   }
 }
 
-void handleSerialCommand() {
-  if (Serial.available()) {
-    char cmd = Serial.read();
+// ==================== PHASE 2B-2: JSON Command Parsing ====================
+
+/**
+ * Extract value from simple JSON string
+ * Handles both quoted strings and numeric values
+ * Example: extractJsonValue("{\"cmd\":\"start\",\"t\":123}", "cmd") → "start"
+ */
+String extractJsonValue(String json, String key) {
+  // Try quoted string value first: "key":"value"
+  String searchKey = "\"" + key + "\":\"";
+  int startIdx = json.indexOf(searchKey);
+  
+  if (startIdx >= 0) {
+    startIdx += searchKey.length();
+    int endIdx = json.indexOf('\"', startIdx);
+    if (endIdx > startIdx) {
+      return json.substring(startIdx, endIdx);
+    }
+  }
+  
+  // Try numeric/unquoted value: "key":value
+  searchKey = "\"" + key + "\":";
+  startIdx = json.indexOf(searchKey);
+  
+  if (startIdx >= 0) {
+    startIdx += searchKey.length();
+    // Skip whitespace
+    while (startIdx < json.length() && json.charAt(startIdx) == ' ') {
+      startIdx++;
+    }
     
-    if (cmd == 'r') {
-      if (state == RUNNING) {
-        // Serial output ONLY
-        queuePrint("{\"run\":%d,\"event\":\"run_cancel\",\"t_ms\":%lu}", runNo, millis() - runStartMs);
-        runNo++;  // Increment on cancel
-      }
-      state = WAITING;
-      runStartMs = 0;
-      runEndMs = 0;
-      hitCount = 0;
+    int endIdx = json.indexOf(',', startIdx);
+    if (endIdx < 0) {
+      endIdx = json.indexOf('}', startIdx);
+    }
+    
+    if (endIdx > startIdx) {
+      return json.substring(startIdx, endIdx);
+    }
+  }
+  
+  return "";
+}
+
+/**
+ * Process JSON command from Serial Gateway
+ * Expected format: {"cmd":"start","cmd_id":"start-1234567890","t":1234567890,"player_id":"guest"}
+ */
+void processJsonCommand(String json) {
+  String cmd = extractJsonValue(json, "cmd");
+  String cmd_id = extractJsonValue(json, "cmd_id");
+  
+  if (cmd.length() == 0) {
+    queuePrint("{\"warn\":\"invalid_json\",\"json\":\"%s\"}", json.c_str());
+    return;
+  }
+  
+  unsigned long now = millis();
+  
+  if (cmd == "start") {
+    // Extract player_id if provided
+    String playerParam = extractJsonValue(json, "player_id");
+    if (playerParam.length() > 0) {
+      playerId = playerParam;
+    }
+    
+    // Check if we can start
+    if (state != WAITING) {
+      queuePrint("{\"cmd\":\"ack\",\"cmd_id\":\"%s\",\"status\":\"error\",\"reason\":\"already_running\"}", 
+                 cmd_id.c_str());
+      return;
+    }
+    
+    if (now < finishLockoutUntil) {
+      queuePrint("{\"cmd\":\"ack\",\"cmd_id\":\"%s\",\"status\":\"error\",\"reason\":\"finish_lockout\"}", 
+                 cmd_id.c_str());
+      return;
+    }
+    
+    // Execute game start - SAME logic as physical maze start (onMazePressed)
+    runNo++;
+    runUid = String(DEVICE_ID) + "-" + String(bootCount) + "-" + String(runNo);
+    runStartMs = now;
+    runEndMs = 0;
+    hitCount = 0;
+    state = RUNNING;
+    finishReleased = !finishPressed;
+    
+    // Emit run_start event
+    queuePrint("{\"run\":%d,\"event\":\"run_start\",\"t_ms\":0,\"esp32_ts_ms\":%lu}", runNo, now);
+    
+    // Send acknowledgment
+    queuePrint("{\"cmd\":\"ack\",\"cmd_id\":\"%s\",\"status\":\"ok\"}", cmd_id.c_str());
+    
+  } else if (cmd == "finish") {
+    // Check if we have an active game
+    if (state != RUNNING) {
+      queuePrint("{\"cmd\":\"ack\",\"cmd_id\":\"%s\",\"status\":\"error\",\"reason\":\"no_active_game\"}", 
+                 cmd_id.c_str());
+      return;
+    }
+    
+    // Execute game finish - SAME logic as physical finish contact (onFinishPressed)
+    // Close active hit if any
+    if (currentHitStartMs > 0) {
+      unsigned long duration = now - currentHitStartMs;
+      hits[hitCount - 1].durationMs = duration;
+      
+      queuePrint("{\"run\":%d,\"event\":\"hit_end\",\"hit\":%d,\"t_ms\":%lu,\"dur_ms\":%lu,\"esp32_ts_ms\":%lu}",
+                 runNo, hitCount, now - runStartMs, duration, now);
+      
       currentHitStartMs = 0;
-      queuePrint("{\"info\":\"reset\"}");
-    } else if (cmd == 's') {
-      queuePrint("{\"info\":\"summary\",\"run\":%d,\"state\":\"%s\",\"hits\":%d,\"wifi\":\"%s\",\"mqtt\":\"%s\"}",
-                 runNo,
-                 state == WAITING ? "WAITING" : state == RUNNING ? "RUNNING" : "FINISHED",
-                 hitCount,
-                 wifiConnected ? "connected" : "disconnected",
-                 mqttConnected ? "connected" : "disconnected");
-    } else if (cmd == 'b' && state != RUNNING) {
-      queuePrint("{\"info\":\"buzzer_test\"}");
-      digitalWrite(PIN_BUZZER, HIGH);
-      delay(100);
-      digitalWrite(PIN_BUZZER, LOW);
-      delay(100);
-      digitalWrite(PIN_BUZZER, HIGH);
-      delay(100);
-      digitalWrite(PIN_BUZZER, LOW);
+    }
+    
+    runEndMs = now;
+    state = FINISHED;
+    finishLockoutUntil = now + LOCKOUT_MS;
+    
+    // Calculate stats
+    unsigned long totalTimeMs = runEndMs - runStartMs;
+    unsigned long totalContactMs = 0;
+    unsigned long longestHitMs = 0;
+    
+    for (int i = 0; i < hitCount; i++) {
+      totalContactMs += hits[i].durationMs;
+      if (hits[i].durationMs > longestHitMs) {
+        longestHitMs = hits[i].durationMs;
+      }
+    }
+    
+    // Apply difficulty settings
+    int scoredHits = max(0, hitCount - freeHits);
+    unsigned long score = totalTimeMs + (scoredHits * hitPenaltyMs);
+    
+    // Emit run_finish event
+    queuePrint("{\"run\":%d,\"event\":\"run_finish\",\"t_ms\":%lu,\"hits\":%d,\"total_contact_ms\":%lu,\"longest_hit_ms\":%lu,\"hit_penalty_ms\":%lu,\"score\":%lu,\"esp32_ts_ms\":%lu}",
+               runNo, totalTimeMs, hitCount, totalContactMs, longestHitMs, hitPenaltyMs, score, now);
+    
+    // Send acknowledgment
+    queuePrint("{\"cmd\":\"ack\",\"cmd_id\":\"%s\",\"status\":\"ok\"}", cmd_id.c_str());
+    
+    delay(100);
+    state = WAITING;
+    
+  } else {
+    queuePrint("{\"cmd\":\"ack\",\"cmd_id\":\"%s\",\"status\":\"error\",\"reason\":\"invalid_command\"}", 
+               cmd_id.c_str());
+  }
+}
+
+/**
+ * Handle legacy single-character commands (r, s, b)
+ * Preserved for backward compatibility with direct serial control
+ */
+void handleLegacyCommand(char cmd) {
+  if (cmd == 'r') {
+    if (state == RUNNING) {
+      queuePrint("{\"run\":%d,\"event\":\"run_cancel\",\"t_ms\":%lu}", runNo, millis() - runStartMs);
+      runNo++;  // Increment on cancel
+    }
+    state = WAITING;
+    runStartMs = 0;
+    runEndMs = 0;
+    hitCount = 0;
+    currentHitStartMs = 0;
+    queuePrint("{\"info\":\"reset\"}");
+    
+  } else if (cmd == 's') {
+    queuePrint("{\"info\":\"summary\",\"run\":%d,\"state\":\"%s\",\"hits\":%d,\"wifi\":\"%s\",\"mqtt\":\"%s\"}",
+               runNo,
+               state == WAITING ? "WAITING" : state == RUNNING ? "RUNNING" : "FINISHED",
+               hitCount,
+               wifiConnected ? "connected" : "disconnected",
+               mqttConnected ? "connected" : "disconnected");
+               
+  } else if (cmd == 'b' && state != RUNNING) {
+    queuePrint("{\"info\":\"buzzer_test\"}");
+    digitalWrite(PIN_BUZZER, HIGH);
+    delay(100);
+    digitalWrite(PIN_BUZZER, LOW);
+    delay(100);
+    digitalWrite(PIN_BUZZER, HIGH);
+    delay(100);
+    digitalWrite(PIN_BUZZER, LOW);
+  }
+}
+
+/**
+ * Handle incoming serial commands (both JSON and legacy)
+ * PHASE 2B-2: Now supports JSON command parsing for dashboard control
+ */
+void handleSerialCommand() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    
+    // Legacy single-character commands (if buffer is empty and char is not '{')
+    if (serialCommandBuffer.length() == 0 && c != '{') {
+      handleLegacyCommand(c);
+      continue;
+    }
+    
+    // Build JSON command buffer
+    if (c == '\n' || c == '\r') {
+      if (serialCommandBuffer.length() > 0) {
+        processJsonCommand(serialCommandBuffer);
+        serialCommandBuffer = "";
+      }
+    } else {
+      serialCommandBuffer += c;
+      
+      // Overflow protection
+      if (serialCommandBuffer.length() > MAX_COMMAND_LENGTH) {
+        queuePrint("{\"warn\":\"command_buffer_overflow\"}");
+        serialCommandBuffer = "";
+      }
     }
   }
 }

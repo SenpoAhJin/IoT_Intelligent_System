@@ -1,0 +1,20 @@
+﻿{
+    "backend":  {
+                    "port":  8000,
+                    "pid":  2684,
+                    "url":  "http://localhost:8000",
+                    "started_at":  "2026-11-25T12:39:42.9573166+08:00"
+                },
+    "dashboard":  {
+                      "port":  3000,
+                      "pid":  13604,
+                      "url":  "http://localhost:3000",
+                      "started_at":  "2026-11-25T12:39:42.9613165+08:00"
+                  },
+    "gateway":  {
+                    "port":  0,
+                    "pid":  2876,
+                    "url":  "USB Serial",
+                    "started_at":  "2026-11-25T12:39:42.9603163+08:00"
+                }
+}

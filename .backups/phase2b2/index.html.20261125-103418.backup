@@ -1,0 +1,1326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AquaBuzz Dashboard - Live Game Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #0a0e27;
+            color: #e0e6ed;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .subtitle {
+            color: #8b95a5;
+            margin-bottom: 30px;
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .grid-2col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: #1a1f3a;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            border: 1px solid #2d3548;
+        }
+        
+        .card-live {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .card h2 {
+            font-size: 1.4em;
+            margin-bottom: 20px;
+            color: #e0e6ed;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 12px;
+        }
+        
+        .card-live h2 {
+            border-bottom-color: rgba(255,255,255,0.3);
+            color: white;
+        }
+        
+        .stat {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid #2d3548;
+        }
+        
+        .stat:last-child {
+            border-bottom: none;
+        }
+        
+        .stat-label {
+            color: #8b95a5;
+            font-weight: 500;
+        }
+        
+        .stat-value {
+            font-weight: bold;
+            color: #e0e6ed;
+        }
+        
+        .card-live .stat {
+            border-bottom-color: rgba(255,255,255,0.2);
+        }
+        
+        .card-live .stat-label {
+            color: rgba(255,255,255,0.8);
+        }
+        
+        .card-live .stat-value {
+            color: white;
+            font-size: 1.1em;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .status-online {
+            background: #2ecc71;
+        }
+        
+        .status-offline {
+            background: #e74c3c;
+        }
+        
+        .status-warning {
+            background: #f39c12;
+        }
+        
+        .live-counter {
+            font-size: 3em;
+            font-weight: bold;
+            text-align: center;
+            padding: 20px 0;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .leaderboard-entry {
+            display: flex;
+            justify-content: space-between;
+            padding: 14px;
+            margin-bottom: 10px;
+            background: #0f1729;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .leaderboard-entry:nth-child(1) {
+            background: linear-gradient(90deg, #f1c40f 0%, #f39c12 100%);
+            color: #0a0e27;
+            font-weight: bold;
+            border-left-color: #f1c40f;
+        }
+        
+        .leaderboard-entry:nth-child(2) {
+            background: linear-gradient(90deg, #95a5a6 0%, #7f8c8d 100%);
+            color: #0a0e27;
+            border-left-color: #bdc3c7;
+        }
+        
+        .leaderboard-entry:nth-child(3) {
+            background: linear-gradient(90deg, #e67e22 0%, #d35400 100%);
+            color: white;
+            border-left-color: #e67e22;
+        }
+        
+        .run-item {
+            padding: 12px;
+            margin-bottom: 10px;
+            background: #0f1729;
+            border-radius: 8px;
+            font-size: 0.95em;
+            border-left: 3px solid #667eea;
+        }
+        
+        .run-item-finished {
+            border-left-color: #2ecc71;
+        }
+        
+        .run-item-cancelled {
+            border-left-color: #e74c3c;
+            opacity: 0.6;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.75em;
+            font-weight: bold;
+            margin-left: 8px;
+            text-transform: uppercase;
+        }
+        
+        .badge-expert {
+            background: #9b59b6;
+            color: white;
+        }
+        
+        .badge-intermediate {
+            background: #3498db;
+            color: white;
+        }
+        
+        .badge-beginner {
+            background: #95a5a6;
+            color: white;
+        }
+        
+        .badge-status {
+            padding: 6px 12px;
+            border-radius: 16px;
+            font-size: 0.85em;
+        }
+        
+        .badge-started {
+            background: #3498db;
+            color: white;
+        }
+        
+        .badge-finished {
+            background: #2ecc71;
+            color: white;
+        }
+        
+        .badge-cancelled {
+            background: #e74c3c;
+            color: white;
+        }
+        
+        .alert {
+            padding: 14px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            background: #34495e;
+            border-left: 4px solid #f39c12;
+            color: #ecf0f1;
+        }
+        
+        .refresh-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1em;
+            margin-bottom: 20px;
+            font-weight: 600;
+            transition: transform 0.2s;
+        }
+        
+        .refresh-btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .game-active {
+            animation: glow 2s ease-in-out infinite;
+        }
+        
+        @keyframes glow {
+            0%, 100% {
+                box-shadow: 0 0 20px rgba(102, 126, 234, 0.5);
+            }
+            50% {
+                box-shadow: 0 0 40px rgba(102, 126, 234, 0.8);
+            }
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #8b95a5;
+        }
+        
+        .empty-state-icon {
+            font-size: 3em;
+            margin-bottom: 10px;
+        }
+        
+        /* PHASE 2A: Game Control Interface */
+        .game-control-card {
+            background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+            color: white;
+            border: 2px solid #60a5fa;
+        }
+        
+        .game-control-card h2 {
+            color: white;
+            border-bottom-color: rgba(255,255,255,0.3);
+        }
+        
+        .game-status {
+            text-align: center;
+            padding: 20px;
+            font-size: 1.5em;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        
+        .game-status-waiting {
+            color: #fbbf24;
+        }
+        
+        .game-status-running {
+            color: #10b981;
+            animation: pulse-status 1.5s ease-in-out infinite;
+        }
+        
+        .game-status-finished {
+            color: #3b82f6;
+        }
+        
+        @keyframes pulse-status {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        
+        .control-btn {
+            width: 100%;
+            padding: 20px;
+            font-size: 1.3em;
+            font-weight: bold;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: all 0.3s ease;
+            margin-top: 15px;
+        }
+        
+        .control-btn:hover:not(:disabled) {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+        }
+        
+        .control-btn:active:not(:disabled) {
+            transform: translateY(-1px);
+        }
+        
+        .control-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .btn-start {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+        }
+        
+        .btn-finish {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: white;
+        }
+        
+        .btn-new-game {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            color: white;
+        }
+        
+        .game-metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .metric-box {
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .metric-label {
+            font-size: 0.9em;
+            opacity: 0.8;
+            margin-bottom: 8px;
+        }
+        
+        .metric-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .integration-notice {
+            background: rgba(251, 191, 36, 0.2);
+            border: 2px solid #fbbf24;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+            text-align: center;
+            font-size: 0.95em;
+        }
+        
+        .integration-notice-icon {
+            font-size: 1.5em;
+            margin-bottom: 5px;
+        }
+        
+        @media (max-width: 768px) {
+            .grid, .grid-2col {
+                grid-template-columns: 1fr;
+            }
+            
+            h1 {
+                font-size: 1.8em;
+            }
+            
+            .control-btn {
+                padding: 18px;
+                font-size: 1.1em;
+            }
+            
+            .game-metrics {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎮 AquaBuzz Live Dashboard</h1>
+        <p class="subtitle">Real-time intelligent buzz-wire maze monitoring</p>
+        
+        <button class="refresh-btn" onclick="loadData()">🔄 Refresh Now</button>
+        
+        <div class="alert" id="status-alert" style="display: none;"></div>
+        
+        <!-- PHASE 2A: Game Control Interface -->
+        <div class="card game-control-card">
+            <h2>🎮 Game Control</h2>
+            
+            <div class="game-status" id="game-status">
+                <span class="game-status-waiting">⏸ WAITING</span>
+            </div>
+            
+            <div id="game-metrics-container" style="display: none;">
+                <div class="game-metrics">
+                    <div class="metric-box">
+                        <div class="metric-label">Elapsed Time</div>
+                        <div class="metric-value" id="metric-time">0.0s</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-label">Total Hits</div>
+                        <div class="metric-value" id="metric-hits">0</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-label">Contact Time</div>
+                        <div class="metric-value" id="metric-contact">0.0s</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-label">Longest Hit</div>
+                        <div class="metric-value" id="metric-longest">0ms</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="final-score-container" style="display: none;">
+                <div class="metric-box" style="margin: 20px 0;">
+                    <div class="metric-label">Final Score</div>
+                    <div class="metric-value" id="metric-score" style="font-size: 2.5em; color: #fbbf24;">0.0s</div>
+                </div>
+            </div>
+            
+            <button id="btn-start-game" class="control-btn btn-start" onclick="handleStartGame()" disabled>
+                🚀 START GAME
+            </button>
+            
+            <button id="btn-finish-game" class="control-btn btn-finish" onclick="handleFinishGame()" style="display: none;" disabled>
+                🏁 FINISH GAME
+            </button>
+            
+            <button id="btn-new-game" class="control-btn btn-new-game" onclick="handleNewGame()" style="display: none;" disabled>
+                🔄 START NEW GAME
+            </button>
+            
+            <div class="integration-notice">
+                <div class="integration-notice-icon">⚙️</div>
+                <div><strong>Dashboard Controls Prepared</strong></div>
+                <div style="margin-top: 5px; font-size: 0.9em;">
+                    ESP32 command integration pending (Phase 2B)
+                </div>
+                <div style="margin-top: 5px; font-size: 0.85em; opacity: 0.8;">
+                    Current system uses existing hardware-triggered game lifecycle
+                </div>
+            </div>
+        </div>
+        
+        <!-- Live Game Status -->
+        <div class="card card-live game-active" id="live-game-card" style="display: none;">
+            <h2>🔴 LIVE GAME IN PROGRESS</h2>
+            <div id="live-game-info"></div>
+        </div>
+        
+        <!-- System Status Grid -->
+        <div class="grid">
+            <div class="card">
+                <h2>⚡ System Health</h2>
+                <div id="health-info">Loading...</div>
+            </div>
+            
+            <div class="card">
+                <h2>🏆 Top Scores</h2>
+                <div id="leaderboard">Loading...</div>
+            </div>
+            
+            <div class="card">
+                <h2>📊 Recent Activity</h2>
+                <div id="recent-runs">Loading...</div>
+            </div>
+        </div>
+        
+        <!-- Players and Details -->
+        <div class="card">
+            <h2>👥 Players & Performance</h2>
+            <div id="players-list">Loading...</div>
+        </div>
+        
+        <!-- Latest Run Details -->
+        <div class="card" id="run-details-card" style="display: none;">
+            <h2>📈 Latest Run Details</h2>
+            <div id="run-details"></div>
+        </div>
+    </div>
+    
+    <script>
+        // Auto-detect backend API URL
+        const API_BASE = window.location.port ? 
+            `http://localhost:8000/api` : 
+            `${window.location.protocol}//${window.location.hostname}:8000/api`;
+        
+        let activeRuns = [];
+        
+        // PHASE 1.3: Active run tracking for display priority
+        let activeRunUid = null;      // Currently active game (null when finished)
+        let displayedRunUid = null;   // Run currently shown in details (persists after finish)
+        let lastApiRequestTime = 0;   // Prevents stale API responses from overwriting newer data
+        
+        // FEAT-004: Dashboard latency measurement
+        let lastEventTimestamp = null;
+        let latencyStats = {
+            apiLatency: [],
+            renderLatency: []
+        };
+        
+        // FEAT-009: Server-Sent Events for real-time updates
+        let eventSource = null;
+        let sseReconnectAttempts = 0;
+        const SSE_MAX_RECONNECT_ATTEMPTS = 5;
+        let useSseUpdates = true;  // Try SSE first, fallback to polling if it fails
+        let lastEventId = null;  // Track event sequence for debugging
+        let sseConnected = false;  // Track connection state
+        
+        // PHASE 2A: Game control state
+        let gameControlState = 'WAITING';  // WAITING | RUNNING | FINISHED
+        let gameControlMetrics = {
+            startTime: null,
+            elapsedMs: 0,
+            hits: 0,
+            contactMs: 0,
+            longestHitMs: 0,
+            finalScore: 0
+        };
+        let gameControlTimer = null;
+        
+        function connectSSE() {
+            if (!useSseUpdates) {
+                console.log('[SSE] SSE disabled, using polling only');
+                return;
+            }
+            
+            try {
+                console.log('[SSE] Connecting to live events stream...');
+                
+                // Build SSE URL with Last-Event-ID if we have one (for reconnection)
+                let sseUrl = `${API_BASE}/live`;
+                
+                eventSource = new EventSource(sseUrl);
+                
+                eventSource.onopen = () => {
+                    console.log('[SSE] ✓ Connected to live events stream');
+                    sseConnected = true;
+                    sseReconnectAttempts = 0;
+                    
+                    // Clear any connection error alerts
+                    const alert = document.getElementById('status-alert');
+                    if (alert && alert.textContent.includes('SSE')) {
+                        alert.style.display = 'none';
+                    }
+                };
+                
+                eventSource.onmessage = (event) => {
+                    try {
+                        // Store event ID for reconnection
+                        if (event.lastEventId) {
+                            lastEventId = event.lastEventId;
+                        }
+                        
+                        const data = JSON.parse(event.data);
+                        console.log('[SSE] Received event:', data);
+                        handleLiveEvent(data);
+                    } catch (err) {
+                        console.error('[SSE] Error parsing event:', err, event.data);
+                    }
+                };
+                
+                // Specific event types (if backend sends them)
+                eventSource.addEventListener('game_event', (event) => {
+                    try {
+                        if (event.lastEventId) {
+                            lastEventId = event.lastEventId;
+                        }
+                        const data = JSON.parse(event.data);
+                        console.log('[SSE] Received game_event:', data);
+                        handleLiveEvent(data);
+                    } catch (err) {
+                        console.error('[SSE] Error parsing game_event:', err);
+                    }
+                });
+                
+                eventSource.onerror = (error) => {
+                    console.error('[SSE] Connection error, readyState:', eventSource.readyState);
+                    sseConnected = false;
+                    
+                    // ReadyState: 0=CONNECTING, 1=OPEN, 2=CLOSED
+                    if (eventSource.readyState === EventSource.CLOSED) {
+                        console.log('[SSE] Connection closed by server');
+                        eventSource.close();
+                        
+                        sseReconnectAttempts++;
+                        
+                        if (sseReconnectAttempts >= SSE_MAX_RECONNECT_ATTEMPTS) {
+                            console.log('[SSE] Max reconnection attempts reached, falling back to polling only');
+                            useSseUpdates = false;
+                            showAlert('Live updates unavailable, using polling mode', 'warning');
+                            return;
+                        }
+                        
+                        // Exponential backoff reconnection
+                        const delay = Math.min(2000 * Math.pow(1.5, sseReconnectAttempts), 30000);
+                        console.log(`[SSE] Reconnecting in ${delay}ms (attempt ${sseReconnectAttempts}/${SSE_MAX_RECONNECT_ATTEMPTS})...`);
+                        setTimeout(connectSSE, delay);
+                    }
+                };
+            } catch (err) {
+                console.error('[SSE] Failed to create EventSource:', err);
+                useSseUpdates = false;
+                showAlert('SSE connection failed, using polling mode', 'warning');
+            }
+        }
+        
+        function handleLiveEvent(event) {
+            const eventType = event.event;
+            const runUid = event.run_uid;
+            
+            console.log(`[SSE] Received ${eventType} event:`, event);
+            
+            // PHASE 1.3: Track active run lifecycle for display priority
+            if (eventType === 'run_start') {
+                activeRunUid = runUid;
+                displayedRunUid = runUid;  // Immediately switch to new game
+                console.log(`[SSE] Active run started: ${activeRunUid}`);
+            } else if (eventType === 'run_finish' || eventType === 'run_cancel') {
+                console.log(`[SSE] Run ${activeRunUid} completed (${eventType})`);
+                activeRunUid = null;  // No longer active
+                // Keep displayedRunUid - completed game stays visible until next run_start
+            }
+            
+            // FEAT-009: Trigger immediate refresh on key events
+            if (eventType === 'hit_start' || eventType === 'hit_end' || 
+                eventType === 'run_start' || eventType === 'run_finish') {
+                // Refresh data immediately without waiting for poll interval
+                loadData();
+            }
+        }
+        
+        async function loadData() {
+            // FEAT-004: Measure API fetch timing
+            const fetchStart = performance.now();
+            
+            await Promise.all([
+                loadHealth(),
+                loadLeaderboard(),
+                loadRecentRuns(),
+                loadPlayers()
+            ]);
+            
+            const fetchEnd = performance.now();
+            const renderStart = performance.now();
+            
+            // Let browser render
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            
+            const renderEnd = performance.now();
+            
+            // FEAT-004: Track latency
+            const apiFetchMs = fetchEnd - fetchStart;
+            const renderMs = renderEnd - renderStart;
+            
+            latencyStats.apiLatency.push(apiFetchMs);
+            latencyStats.renderLatency.push(renderMs);
+            
+            // Keep only last 20 measurements
+            if (latencyStats.apiLatency.length > 20) latencyStats.apiLatency.shift();
+            if (latencyStats.renderLatency.length > 20) latencyStats.renderLatency.shift();
+            
+            // FEAT-004: Console logging for debugging
+            console.log(`[Dashboard] API fetch: ${apiFetchMs.toFixed(1)}ms, render: ${renderMs.toFixed(1)}ms`);
+            
+            // PHASE 2A: Sync game control UI with active run state
+            syncGameControlWithActiveRun();
+        }
+        
+        async function recoverActiveRunAfterRefresh() {
+            /**
+             * PHASE 2B-1: Browser refresh recovery
+             * Query backend for the currently active run and restore tracking state
+             */
+            try {
+                console.log('[Recovery] Checking for active run after browser refresh...');
+                const res = await fetch(`${API_BASE}/active_run`);
+                const data = await res.json();
+                
+                if (data.active && data.run_uid) {
+                    console.log(`[Recovery] ✓ Active run found: ${data.run_uid}`);
+                    activeRunUid = data.run_uid;
+                    displayedRunUid = data.run_uid;
+                    
+                    // Load the active run details immediately
+                    if (data.run_id) {
+                        await loadRunDetails(data.run_id);
+                    }
+                    
+                    return true;
+                } else {
+                    console.log('[Recovery] No active run, loading latest finished run');
+                    activeRunUid = null;
+                    // displayedRunUid will be set by loadRecentRuns to latest finished
+                    return false;
+                }
+            } catch (err) {
+                console.error('[Recovery] Error checking for active run:', err);
+                return false;
+            }
+        }
+        
+        async function loadHealth() {
+            try {
+                const res = await fetch(`${API_BASE}/health`);
+                const data = await res.json();
+                
+                // Update active runs indicator
+                const previousActiveRuns = activeRuns;
+                activeRuns = data.active_runs || 0;
+                
+                // FEAT-008: Update polling rate based on active games
+                if (activeRuns !== previousActiveRuns) {
+                    updatePollRate();
+                }
+                
+                if (activeRuns > 0) {
+                    document.getElementById('live-game-card').style.display = 'block';
+                    document.getElementById('live-game-info').innerHTML = `
+                        <div class="live-counter">${activeRuns}</div>
+                        <div style="text-align: center; font-size: 1.2em;">
+                            ${activeRuns === 1 ? 'Player in Action' : 'Players in Action'}
+                        </div>
+                    `;
+                } else {
+                    document.getElementById('live-game-card').style.display = 'none';
+                }
+                
+                const mqttStatus = data.mqtt_connected ? 
+                    '<span class="status-indicator status-online"></span>Connected' :
+                    '<span class="status-indicator status-offline"></span>Disconnected';
+                
+                // Device status
+                let deviceHtml = '';
+                if (data.devices && data.devices.length > 0) {
+                    data.devices.forEach(device => {
+                        const devStatus = device.online ? 
+                            '<span class="status-indicator status-online"></span>Online' :
+                            '<span class="status-indicator status-offline"></span>Offline';
+                        deviceHtml += `
+                            <div class="stat">
+                                <span class="stat-label">Device ${device.id}</span>
+                                <span class="stat-value">${devStatus}</span>
+                            </div>
+                        `;
+                    });
+                } else {
+                    deviceHtml = `
+                        <div class="stat">
+                            <span class="stat-label">ESP32 Device</span>
+                            <span class="stat-value"><span class="status-indicator status-warning"></span>Waiting...</span>
+                        </div>
+                    `;
+                }
+                
+                document.getElementById('health-info').innerHTML = `
+                    <div class="stat">
+                        <span class="stat-label">Backend API</span>
+                        <span class="stat-value"><span class="status-indicator status-online"></span>Online</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">MQTT Broker</span>
+                        <span class="stat-value">${mqttStatus}</span>
+                    </div>
+                    ${deviceHtml}
+                    <div class="stat">
+                        <span class="stat-label">Games Playing</span>
+                        <span class="stat-value">${activeRuns}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Total Completed</span>
+                        <span class="stat-value">${data.completed_runs || 0}</span>
+                    </div>
+                `;
+            } catch (err) {
+                console.error('Backend connection error:', err);
+                document.getElementById('health-info').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">❌</div>
+                        <div>Cannot connect to backend</div>
+                        <div style="font-size: 0.9em; margin-top: 10px;">${API_BASE}</div>
+                    </div>
+                `;
+            }
+        }
+        
+        async function loadLeaderboard() {
+            try {
+                const res = await fetch(`${API_BASE}/leaderboard?limit=5`);
+                const data = await res.json();
+                
+                if (data.length === 0) {
+                    document.getElementById('leaderboard').innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">🏆</div>
+                            <div>No completed runs yet</div>
+                            <div style="font-size: 0.9em; margin-top: 5px;">Start playing to see scores!</div>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                const html = data.map(entry => `
+                    <div class="leaderboard-entry">
+                        <span>${entry.rank}. ${entry.player_id}</span>
+                        <span>${(entry.score / 1000).toFixed(2)}s (${entry.hits} hits)</span>
+                    </div>
+                `).join('');
+                
+                document.getElementById('leaderboard').innerHTML = html;
+            } catch (err) {
+                document.getElementById('leaderboard').innerHTML = '<div class="empty-state">Error loading leaderboard</div>';
+            }
+        }
+        
+        async function loadRecentRuns() {
+            // PHASE 1.3: Capture request time for race condition protection
+            const requestTime = performance.now();
+            
+            try {
+                const res = await fetch(`${API_BASE}/runs?limit=10`);
+                const data = await res.json();
+                
+                if (data.length === 0) {
+                    document.getElementById('recent-runs').innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📊</div>
+                            <div>No activity yet</div>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                const html = data.map(run => {
+                    const statusBadge = run.status === 'finished' ? 
+                        '<span class="badge badge-finished">Finished</span>' :
+                        run.status === 'started' ?
+                        '<span class="badge badge-started">In Progress</span>' :
+                        '<span class="badge badge-cancelled">Cancelled</span>';
+                    
+                    const itemClass = run.status === 'finished' ? 'run-item-finished' :
+                                     run.status === 'cancelled' ? 'run-item-cancelled' : '';
+                    
+                    return `
+                        <div class="run-item ${itemClass}">
+                            <div><strong>${run.player_id}</strong> ${statusBadge}</div>
+                            <div style="margin-top: 5px; font-size: 0.9em;">
+                                ${run.hits} hits • 
+                                ${run.duration_ms ? (run.duration_ms / 1000).toFixed(2) + 's' : 'In progress'}
+                                ${run.score ? ' • Score: ' + (run.score / 1000).toFixed(2) + 's' : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                
+                document.getElementById('recent-runs').innerHTML = html;
+                
+                // PHASE 1.3: Prioritize active game, preserve displayed game, fall back to latest finished
+                let runToDisplay = null;
+                let displayReason = '';
+                
+                // Priority 1: Active game (currently in progress)
+                if (activeRunUid) {
+                    runToDisplay = data.find(r => r.run_uid === activeRunUid);
+                    if (runToDisplay) {
+                        displayReason = `active game (${activeRunUid})`;
+                        displayedRunUid = activeRunUid;  // Update displayed reference
+                    } else {
+                        console.log(`[Dashboard] Active run ${activeRunUid} not yet in API response, keeping current display`);
+                        // Don't clear activeRunUid - run might just not be in DB yet
+                    }
+                }
+                
+                // Priority 2: Previously displayed run (keep showing until new game starts)
+                if (!runToDisplay && displayedRunUid) {
+                    runToDisplay = data.find(r => r.run_uid === displayedRunUid);
+                    if (runToDisplay) {
+                        displayReason = `previously displayed (${displayedRunUid}, ${runToDisplay.status})`;
+                        
+                        // Clear stale activeRunUid if displayed run is finished (handle missed run_finish)
+                        if (activeRunUid === displayedRunUid && runToDisplay.status === 'finished') {
+                            console.log(`[Dashboard] Clearing stale activeRunUid - run ${activeRunUid} is finished`);
+                            activeRunUid = null;
+                        }
+                    } else {
+                        console.log(`[Dashboard] Previously displayed run ${displayedRunUid} no longer in recent runs`);
+                        displayedRunUid = null;  // Clear stale reference
+                    }
+                }
+                
+                // Priority 3: Latest finished run (fallback when no active or displayed run)
+                if (!runToDisplay) {
+                    runToDisplay = data.find(r => r.status === 'finished');
+                    if (runToDisplay) {
+                        displayReason = `latest finished (${runToDisplay.run_uid})`;
+                        displayedRunUid = runToDisplay.run_uid;  // Remember what we're showing
+                    }
+                }
+                
+                // Apply display if we have a run and this isn't a stale request
+                if (runToDisplay) {
+                    if (requestTime >= lastApiRequestTime) {
+                        console.log(`[Dashboard] Displaying ${displayReason}`);
+                        loadRunDetails(runToDisplay.id);
+                        lastApiRequestTime = requestTime;
+                    } else {
+                        console.log(`[Dashboard] Ignoring stale API request (${requestTime.toFixed(1)} < ${lastApiRequestTime.toFixed(1)})`);
+                    }
+                }
+            } catch (err) {
+                document.getElementById('recent-runs').innerHTML = '<div class="empty-state">Error loading runs</div>';
+            }
+        }
+        
+        async function loadRunDetails(runId) {
+            try {
+                const res = await fetch(`${API_BASE}/runs/${runId}`);
+                const run = await res.json();
+                
+                document.getElementById('run-details-card').style.display = 'block';
+                
+                let hitsHtml = '';
+                if (run.hit_records && run.hit_records.length > 0) {
+                    // FEAT-007: Show in-progress vs completed hits differently
+                    hitsHtml = run.hit_records.map(hit => {
+                        if (hit.duration_ms === 0) {
+                            // In-progress hit
+                            return `
+                                <div class="stat" style="background: rgba(239, 68, 68, 0.1); border-left: 3px solid #ef4444;">
+                                    <span class="stat-label">🔴 Hit #${hit.hit_no} (IN PROGRESS)</span>
+                                    <span class="stat-value">
+                                        Started at ${(hit.start_ms / 1000).toFixed(2)}s
+                                    </span>
+                                </div>
+                            `;
+                        } else {
+                            // Completed hit
+                            return `
+                                <div class="stat">
+                                    <span class="stat-label">✓ Hit #${hit.hit_no}</span>
+                                    <span class="stat-value">
+                                        ${(hit.start_ms / 1000).toFixed(2)}s → ${(hit.duration_ms).toFixed(0)}ms contact
+                                    </span>
+                                </div>
+                            `;
+                        }
+                    }).join('');
+                } else {
+                    hitsHtml = '<div class="empty-state">Perfect run - no hits!</div>';
+                }
+                
+                document.getElementById('run-details').innerHTML = `
+                    <div class="stat">
+                        <span class="stat-label">Player</span>
+                        <span class="stat-value">${run.player_id}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Total Time</span>
+                        <span class="stat-value">${(run.duration_ms / 1000).toFixed(2)}s</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Total Hits</span>
+                        <span class="stat-value">${run.hits}</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Total Contact Time</span>
+                        <span class="stat-value">${(run.total_contact_ms / 1000).toFixed(2)}s</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Longest Hit</span>
+                        <span class="stat-value">${(run.longest_hit_ms).toFixed(0)}ms</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Final Score</span>
+                        <span class="stat-value">${(run.score / 1000).toFixed(2)}s</span>
+                    </div>
+                    <h3 style="margin-top: 20px; margin-bottom: 10px; color: #667eea;">Individual Hits</h3>
+                    ${hitsHtml}
+                `;
+            } catch (err) {
+                console.error('Error loading run details:', err);
+            }
+        }
+        
+        async function loadPlayers() {
+            try {
+                const res = await fetch(`${API_BASE}/players`);
+                const data = await res.json();
+                
+                if (data.length === 0) {
+                    document.getElementById('players-list').innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">👥</div>
+                            <div>No players yet</div>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                const html = data.map(player => {
+                    const badgeClass = player.skill_level ? 
+                        `badge badge-${player.skill_level}` : '';
+                    const skillBadge = player.skill_level ?
+                        `<span class="${badgeClass}">${player.skill_level}</span>` : '';
+                    
+                    return `
+                        <div class="stat">
+                            <span class="stat-label">
+                                ${player.id} ${skillBadge}
+                            </span>
+                            <span class="stat-value">
+                                ${player.total_runs} runs
+                                ${player.best_score ? ` • Best: ${(player.best_score / 1000).toFixed(2)}s` : ''}
+                                ${player.avg_score ? ` • Avg: ${(player.avg_score / 1000).toFixed(2)}s` : ''}
+                            </span>
+                        </div>
+                    `;
+                }).join('');
+                
+                document.getElementById('players-list').innerHTML = html;
+            } catch (err) {
+                document.getElementById('players-list').innerHTML = '<div class="empty-state">Error loading players</div>';
+            }
+        }
+        
+        // FEAT-008: Adaptive polling rate
+        let pollInterval = 3000;  // Start at 3 seconds
+        let intervalId = null;
+        let lastActiveCheck = 0;
+        
+        function updatePollRate() {
+            const newInterval = (activeRuns > 0) ? 1000 : 3000;  // 1s during games, 3s idle
+            
+            if (newInterval !== pollInterval) {
+                pollInterval = newInterval;
+                console.log(`[Dashboard] Polling rate changed to ${pollInterval}ms (active runs: ${activeRuns})`);
+                
+                // Restart interval with new rate
+                if (intervalId) clearInterval(intervalId);
+                intervalId = setInterval(loadData, pollInterval);
+            }
+        }
+        
+        /**
+         * PHASE 2B-1: Show alert message to user
+         */
+        function showAlert(message, type = 'info') {
+            const alert = document.getElementById('status-alert');
+            alert.textContent = message;
+            alert.className = `alert alert-${type}`;
+            alert.style.display = 'block';
+            
+            // Auto-hide after 5 seconds for non-error messages
+            if (type !== 'error') {
+                setTimeout(() => {
+                    alert.style.display = 'none';
+                }, 5000);
+            }
+        }
+        
+        // Start adaptive polling
+        intervalId = setInterval(loadData, pollInterval);
+        
+        // FEAT-009: Connect to SSE for real-time updates
+        connectSSE();
+        
+        // PHASE 2B-1: Initial load with browser refresh recovery
+        (async () => {
+            console.log('[Dashboard] Initializing...');
+            
+            // First, try to recover active run state after browser refresh
+            await recoverActiveRunAfterRefresh();
+            
+            // Then load all dashboard data
+            await loadData();
+            
+            console.log('[Dashboard] Initialization complete');
+        })();
+        
+        // ============================================================================
+        // PHASE 2A: GAME CONTROL FUNCTIONS
+        // ============================================================================
+        
+        /**
+         * Handle START GAME button click
+         * Future: Dashboard → FastAPI → Serial Gateway → ESP32
+         */
+        function handleStartGame() {
+            console.log('[GameControl] START GAME requested (integration pending)');
+            
+            // PHASE 2A: Do NOT simulate game start
+            // This function is prepared for future backend integration
+            // When Phase 2B is complete, this will send: POST /api/game/start
+            
+            alert('🚧 Game control integration pending (Phase 2B)\n\n' +
+                  'Current system uses existing hardware-triggered game lifecycle.\n' +
+                  'Dashboard-controlled start will be enabled after ESP32 integration.');
+        }
+        
+        /**
+         * Handle FINISH GAME button click
+         * Future: Dashboard → FastAPI → Serial Gateway → ESP32
+         */
+        function handleFinishGame() {
+            console.log('[GameControl] FINISH GAME requested (integration pending)');
+            
+            // PHASE 2A: Do NOT simulate game finish
+            // This function is prepared for future backend integration
+            // When Phase 2B is complete, this will send: POST /api/game/finish
+            
+            const confirmFinish = confirm('⚠️ Game control integration pending (Phase 2B)\n\n' +
+                                        'Current system uses existing hardware-triggered game lifecycle.\n' +
+                                        'Dashboard-controlled finish will be enabled after ESP32 integration.\n\n' +
+                                        'This action has no effect yet.');
+            
+            if (confirmFinish) {
+                console.log('[GameControl] User acknowledged integration pending');
+            }
+        }
+        
+        /**
+         * Handle NEW GAME button click (after game finished)
+         */
+        function handleNewGame() {
+            console.log('[GameControl] NEW GAME requested (integration pending)');
+            handleStartGame();  // Same as START GAME
+        }
+        
+        /**
+         * Update game control UI based on current state
+         * This will be called by SSE events once integration is complete
+         */
+        function updateGameControls(state, metrics = null) {
+            console.log(`[GameControl] Updating UI to state: ${state}`, metrics);
+            
+            gameControlState = state;
+            
+            const statusEl = document.getElementById('game-status');
+            const metricsContainer = document.getElementById('game-metrics-container');
+            const scoreContainer = document.getElementById('final-score-container');
+            const btnStart = document.getElementById('btn-start-game');
+            const btnFinish = document.getElementById('btn-finish-game');
+            const btnNew = document.getElementById('btn-new-game');
+            
+            if (state === 'WAITING') {
+                statusEl.innerHTML = '<span class="game-status-waiting">⏸ WAITING</span>';
+                metricsContainer.style.display = 'none';
+                scoreContainer.style.display = 'none';
+                btnStart.style.display = 'block';
+                btnFinish.style.display = 'none';
+                btnNew.style.display = 'none';
+                
+                // Stop timer if running
+                if (gameControlTimer) {
+                    clearInterval(gameControlTimer);
+                    gameControlTimer = null;
+                }
+                
+            } else if (state === 'RUNNING') {
+                statusEl.innerHTML = '<span class="game-status-running">🔴 RUNNING</span>';
+                metricsContainer.style.display = 'block';
+                scoreContainer.style.display = 'none';
+                btnStart.style.display = 'none';
+                btnFinish.style.display = 'block';
+                btnNew.style.display = 'none';
+                
+                // Start metrics timer (this would update from real data once integrated)
+                if (metrics) {
+                    gameControlMetrics = { ...metrics };
+                    if (metrics.startTime) {
+                        gameControlMetrics.startTime = metrics.startTime;
+                        startGameControlTimer();
+                    }
+                }
+                
+            } else if (state === 'FINISHED') {
+                statusEl.innerHTML = '<span class="game-status-finished">✅ FINISHED</span>';
+                metricsContainer.style.display = 'block';
+                scoreContainer.style.display = 'block';
+                btnStart.style.display = 'none';
+                btnFinish.style.display = 'none';
+                btnNew.style.display = 'block';
+                
+                // Stop timer
+                if (gameControlTimer) {
+                    clearInterval(gameControlTimer);
+                    gameControlTimer = null;
+                }
+                
+                // Update final metrics
+                if (metrics) {
+                    updateGameMetricsDisplay(metrics);
+                }
+            }
+        }
+        
+        /**
+         * Start the game control timer (for elapsed time display)
+         */
+        function startGameControlTimer() {
+            if (gameControlTimer) clearInterval(gameControlTimer);
+            
+            gameControlTimer = setInterval(() => {
+                if (gameControlMetrics.startTime) {
+                    gameControlMetrics.elapsedMs = Date.now() - gameControlMetrics.startTime;
+                    updateGameMetricsDisplay(gameControlMetrics);
+                }
+            }, 100);  // Update every 100ms for smooth timer
+        }
+        
+        /**
+         * Update the game metrics display
+         */
+        function updateGameMetricsDisplay(metrics) {
+            document.getElementById('metric-time').textContent = 
+                (metrics.elapsedMs / 1000).toFixed(1) + 's';
+            
+            document.getElementById('metric-hits').textContent = 
+                metrics.hits;
+            
+            document.getElementById('metric-contact').textContent = 
+                (metrics.contactMs / 1000).toFixed(2) + 's';
+            
+            document.getElementById('metric-longest').textContent = 
+                metrics.longestHitMs.toFixed(0) + 'ms';
+            
+            if (metrics.finalScore) {
+                document.getElementById('metric-score').textContent = 
+                    (metrics.finalScore / 1000).toFixed(2) + 's';
+            }
+        }
+        
+        /**
+         * Handle game state updates from SSE events (future integration)
+         * This will be called when ESP32 sends game_start, game_finish events
+         */
+        function handleGameStateUpdate(event) {
+            console.log('[GameControl] Game state event received:', event);
+            
+            // PHASE 2B will implement:
+            // - game_start event → updateGameControls('RUNNING', {...})
+            // - game_finish event → updateGameControls('FINISHED', {...})
+            // - hit updates → update metrics in real-time
+            
+            // For now, this is a placeholder for future integration
+        }
+        
+        /**
+         * PHASE 2A: Sync game control state with existing game monitoring
+         * This bridges the new controls with the existing active run tracking
+         */
+        function syncGameControlWithActiveRun() {
+            // If there's an active run from existing system, reflect it in game controls
+            if (activeRunUid && gameControlState === 'WAITING') {
+                console.log('[GameControl] Syncing with existing active run:', activeRunUid);
+                // Note: Buttons remain disabled as this is existing hardware-triggered game
+                // This just updates the visual state for consistency
+                const statusEl = document.getElementById('game-status');
+                statusEl.innerHTML = '<span class="game-status-running">🔴 RUNNING (Hardware)</span>';
+            } else if (!activeRunUid && gameControlState === 'RUNNING') {
+                console.log('[GameControl] Active run finished, returning to WAITING');
+                updateGameControls('WAITING');
+            }
+        }
+    
+    </script>
+</body>
+</html>
