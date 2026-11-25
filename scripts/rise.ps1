@@ -1,10 +1,13 @@
-# AquaBuzz Startup Script - USB Serial Gateway Edition
-# PowerShell 5.1 Compatible
-# Starts FastAPI backend, Serial Gateway, and dashboard
+# AquaBuzz RISE - Complete Automated Startup System (CORRECTED)
+# PowerShell 5.1+ Compatible
+# Properly tracks actual service processes, not wrappers
 
 $ErrorActionPreference = 'Stop'
 
-# Configuration - Dynamically determine project root
+# ============================================
+# CONFIGURATION
+# ============================================
+
 $script:PROJECT_ROOT = (Get-Item $PSScriptRoot).Parent.FullName
 $script:VENV_PYTHON = Join-Path $PROJECT_ROOT '.venv\Scripts\python.exe'
 $script:BACKEND_DIR = Join-Path $PROJECT_ROOT 'backend'
@@ -12,78 +15,43 @@ $script:DASHBOARD_DIR = Join-Path $PROJECT_ROOT 'dashboard'
 $script:PROCESS_TRACKER = Join-Path $PROJECT_ROOT '.aquabuzz-processes.json'
 $script:ENV_FILE = Join-Path $BACKEND_DIR '.env'
 
-# Public MQTT broker
-$script:MQTT_BROKER = 'test.mosquitto.org'
-$script:MQTT_PORT = 1883
+# Service configuration
 $script:API_PORT = 8000
 $script:DASHBOARD_PORTS = @(3000, 3001, 3002, 8080, 8081)
 
-# Global state
+# State tracking
 $script:BackendProcessId = $null
 $script:GatewayProcessId = $null
 $script:DashboardProcessId = $null
 $script:DashboardPort = $null
 
-# Functions
-function Test-ProjectRequirements {
-    Write-Host 'Validating project requirements...' -ForegroundColor Cyan
-    
-    $checks = @{
-        'Project Root' = (Test-Path $script:PROJECT_ROOT)
-        'Python Virtual Env' = (Test-Path $script:VENV_PYTHON)
-        'Backend Directory' = (Test-Path $script:BACKEND_DIR)
-        'Dashboard Directory' = (Test-Path $script:DASHBOARD_DIR)
-        'Backend .env File' = (Test-Path $script:ENV_FILE)
-        'Serial Gateway Script' = (Test-Path (Join-Path $script:BACKEND_DIR 'serial_gateway.py'))
-    }
-    
-    $allPassed = $true
-    foreach ($check in $checks.GetEnumerator()) {
-        if ($check.Value) {
-            Write-Host "  [OK]  $($check.Key)" -ForegroundColor Green
-        } else {
-            Write-Host "  [FAIL] $($check.Key)" -ForegroundColor Red
-            $allPassed = $false
-        }
-    }
-    
-    if (-not $allPassed) {
-        throw 'Project requirements validation failed'
-    }
-    
-    Write-Host 'All requirements validated' -ForegroundColor Green
+# ============================================
+# UTILITY FUNCTIONS
+# ============================================
+
+function Write-Section {
+    param([string]$Message, [string]$Color = 'Cyan')
+    Write-Host ''
+    Write-Host ('=' * 60) -ForegroundColor $Color
+    Write-Host "  $Message" -ForegroundColor $Color
+    Write-Host ('=' * 60) -ForegroundColor $Color
     Write-Host ''
 }
 
-function Test-InternetConnectivity {
-    Write-Host 'Checking internet connectivity...' -ForegroundColor Cyan
+function Write-Step {
+    param([string]$Message, [string]$Status = 'INFO', [string]$Detail = '')
     
-    try {
-        $response = Test-Connection -ComputerName '8.8.8.8' -Count 1 -Quiet -ErrorAction Stop
-        if ($response) {
-            Write-Host '  Internet connectivity: OK' -ForegroundColor Green
-        } else {
-            Write-Host '  Internet connectivity: FAILED' -ForegroundColor Yellow
-            Write-Host '  Serial Gateway will reconnect when internet returns' -ForegroundColor Yellow
-        }
-    } catch {
-        Write-Host '  Internet connectivity: FAILED' -ForegroundColor Yellow
-        Write-Host '  Serial Gateway will reconnect when internet returns' -ForegroundColor Yellow
+    $color = switch ($Status) {
+        'OK' { 'Green' }
+        'WARN' { 'Yellow' }
+        'FAIL' { 'Red' }
+        'INFO' { 'Cyan' }
+        default { 'White' }
     }
     
-    Write-Host ''
-}
-
-function Test-PortAvailability {
-    param([int]$Port)
-    
-    try {
-        $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $Port)
-        $listener.Start()
-        $listener.Stop()
-        return $true
-    } catch {
-        return $false
+    Write-Host "[$Status] $Message" -ForegroundColor $color
+    if ($Detail) {
+        Write-Host "  $Detail" -ForegroundColor Gray
     }
 }
 
@@ -101,17 +69,13 @@ function Get-ProcessOwningPort {
     return $null
 }
 
-function Get-ProcessDetails {
+function Get-ProcessCommandLine {
     param([int]$ProcessId)
     
     try {
         $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
         if ($proc) {
-            return @{
-                Name = $proc.Name
-                CommandLine = $proc.CommandLine
-                ProcessId = $ProcessId
-            }
+            return $proc.CommandLine
         }
     } catch {
         return $null
@@ -119,108 +83,199 @@ function Get-ProcessDetails {
     return $null
 }
 
-function Test-IsAquaBuzzBackend {
-    param([int]$ProcessId)
+function Test-IsAquaBuzzProcess {
+    param([int]$ProcessId, [string]$ServiceType)
     
-    $details = Get-ProcessDetails -ProcessId $ProcessId
-    if (-not $details) {
+    $cmdLine = Get-ProcessCommandLine -ProcessId $ProcessId
+    if (-not $cmdLine) {
         return $false
     }
     
-    # Check if it's a Python process running uvicorn with our app
-    if ($details.Name -eq 'python.exe' -and $details.CommandLine -like '*uvicorn*app.main:app*') {
-        return $true
+    # Check for ForgeMind - never touch these
+    if ($cmdLine -like '*arise*' -or $cmdLine -like '*rest*' -or $cmdLine -like '*ForgeMind*') {
+        return $false
     }
     
-    return $false
+    # Check for AquaBuzz identifiers
+    switch ($ServiceType) {
+        'backend' {
+            return $cmdLine -like '*uvicorn*app.main:app*'
+        }
+        'gateway' {
+            return $cmdLine -like '*serial_gateway.py*'
+        }
+        'dashboard' {
+            return $cmdLine -like '*http.server*'
+        }
+        default {
+            return $false
+        }
+    }
 }
 
-function Test-IsForgeMindProcess {
-    param([int]$ProcessId)
+function Save-ProcessTracker {
+    $data = @{}
     
-    $details = Get-ProcessDetails -ProcessId $ProcessId
-    if (-not $details) {
-        return $false
+    if ($script:BackendProcessId) {
+        $data['backend'] = @{
+            pid = $script:BackendProcessId
+            port = $script:API_PORT
+            url = "http://localhost:$script:API_PORT"
+            started_at = (Get-Date).ToString('o')
+        }
     }
     
-    # Check for ForgeMind identifiers
-    if ($details.CommandLine -like '*arise*' -or $details.CommandLine -like '*rest*' -or $details.CommandLine -like '*ForgeMind*') {
-        return $true
+    if ($script:GatewayProcessId) {
+        $data['gateway'] = @{
+            pid = $script:GatewayProcessId
+            port = 0
+            url = 'USB Serial'
+            started_at = (Get-Date).ToString('o')
+        }
     }
     
-    return $false
+    if ($script:DashboardProcessId -and $script:DashboardPort) {
+        $data['dashboard'] = @{
+            pid = $script:DashboardProcessId
+            port = $script:DashboardPort
+            url = "http://localhost:$script:DashboardPort"
+            started_at = (Get-Date).ToString('o')
+        }
+    }
+    
+    if ($data.Count -gt 0) {
+        try {
+            $json = $data | ConvertTo-Json -Depth 5
+            Set-Content -Path $script:PROCESS_TRACKER -Value $json -Encoding UTF8
+            Write-Step 'Process tracker saved' 'OK'
+        } catch {
+            Write-Step 'Failed to save process tracker' 'WARN' $_.Exception.Message
+        }
+    }
 }
+
+# ============================================
+# VALIDATION FUNCTIONS
+# ============================================
+
+function Test-ProjectRequirements {
+    Write-Step 'Validating project requirements' 'INFO'
+    
+    $checks = @{
+        'Project Root' = (Test-Path $script:PROJECT_ROOT)
+        'Python Virtual Environment' = (Test-Path $script:VENV_PYTHON)
+        'Backend Directory' = (Test-Path $script:BACKEND_DIR)
+        'Dashboard Directory' = (Test-Path $script:DASHBOARD_DIR)
+        'Backend Configuration (.env)' = (Test-Path $script:ENV_FILE)
+        'Serial Gateway Script' = (Test-Path (Join-Path $script:BACKEND_DIR 'serial_gateway.py'))
+        'Dashboard HTML' = (Test-Path (Join-Path $script:DASHBOARD_DIR 'index.html'))
+    }
+    
+    $allPassed = $true
+    foreach ($check in $checks.GetEnumerator()) {
+        if ($check.Value) {
+            Write-Step $check.Key 'OK'
+        } else {
+            Write-Step $check.Key 'FAIL'
+            $allPassed = $false
+        }
+    }
+    
+    if (-not $allPassed) {
+        throw 'Project requirements validation failed'
+    }
+    
+    Write-Host ''
+}
+
+# ============================================
+# SERVICE MANAGEMENT FUNCTIONS
+# ============================================
 
 function Start-BackendService {
-    Write-Host 'Starting FastAPI Backend...' -ForegroundColor Cyan
+    Write-Step 'Starting FastAPI Backend' 'INFO'
     
-    $existingProcessId = Get-ProcessOwningPort -Port $script:API_PORT
+    # Check if already running
+    $existingPid = Get-ProcessOwningPort -Port $script:API_PORT
     
-    if ($existingProcessId) {
-        Write-Host "  Port $script:API_PORT already in use by PID $existingProcessId" -ForegroundColor Yellow
-        
-        # Check if it's a ForgeMind process - never touch it
-        if (Test-IsForgeMindProcess -ProcessId $existingProcessId) {
-            Write-Host '  WARNING: Port occupied by ForgeMind process' -ForegroundColor Red
-            Write-Host '  Will NOT terminate ForgeMind process' -ForegroundColor Red
-            throw "Port $script:API_PORT is occupied by ForgeMind. Please use a different port."
-        }
-        
-        # Check if it's an AquaBuzz backend
-        if (Test-IsAquaBuzzBackend -ProcessId $existingProcessId) {
-            Write-Host '  Existing process appears to be AquaBuzz backend' -ForegroundColor Yellow
+    if ($existingPid) {
+        if (Test-IsAquaBuzzProcess -ProcessId $existingPid -ServiceType 'backend') {
+            Write-Step 'Checking existing backend health' 'INFO'
             
-            # Check if it's healthy
             try {
-                $response = Invoke-WebRequest -Uri "http://localhost:$script:API_PORT/api/health" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+                $response = Invoke-WebRequest -Uri "http://localhost:$script:API_PORT/api/health" -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
                 $health = $response.Content | ConvertFrom-Json
                 
                 if ($health.status -eq 'healthy') {
-                    Write-Host '  Existing AquaBuzz backend is healthy - reusing it' -ForegroundColor Green
-                    $script:BackendProcessId = $existingProcessId
+                    Write-Step 'Existing backend is healthy - reusing' 'OK'
+                    $script:BackendProcessId = $existingPid
+                    
+                    # Report MQTT status
+                    if ($health.mqtt_connected) {
+                        Write-Step 'MQTT is connected' 'OK'
+                    } else {
+                        Write-Step 'MQTT is NOT connected' 'WARN' 'Backend will retry connection'
+                    }
+                    
                     Write-Host ''
                     return
                 }
             } catch {
-                Write-Host '  Existing backend not responding to health check' -ForegroundColor Yellow
+                Write-Step 'Existing backend not responding, will restart' 'WARN'
+                Stop-Process -Id $existingPid -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 2
             }
+        } else {
+            $cmdLine = Get-ProcessCommandLine -ProcessId $existingPid
+            Write-Step "Port $script:API_PORT occupied by another process" 'FAIL' "PID: $existingPid"
+            throw "Port $script:API_PORT is in use by: $cmdLine"
         }
+    }
+    
+    # Start new backend
+    Write-Step 'Launching uvicorn backend' 'INFO'
+    
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $script:VENV_PYTHON
+    $startInfo.Arguments = "-m uvicorn app.main:app --host 0.0.0.0 --port $script:API_PORT --env-file .env"
+    $startInfo.WorkingDirectory = $script:BACKEND_DIR
+    $startInfo.UseShellExecute = $true
+    $startInfo.WindowStyle = 'Normal'
+    
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    Write-Step "Backend wrapper started (PID: $($process.Id))" 'OK'
+    
+    # Wait for actual backend process to bind to port
+    Write-Step 'Waiting for backend to bind to port' 'INFO'
+    
+    $maxAttempts = 20
+    $actualPid = $null
+    
+    for ($i = 1; $i -le $maxAttempts; $i++) {
+        Start-Sleep -Milliseconds 500
         
-        # Port occupied by unknown process
-        $details = Get-ProcessDetails -ProcessId $existingProcessId
-        if ($details) {
-            Write-Host "  Port occupied by: $($details.Name)" -ForegroundColor Yellow
-            Write-Host "  Command: $($details.CommandLine)" -ForegroundColor Gray
+        $actualPid = Get-ProcessOwningPort -Port $script:API_PORT
+        if ($actualPid) {
+            Write-Step "Backend process found (PID: $actualPid)" 'OK'
+            $script:BackendProcessId = $actualPid
+            break
         }
-        throw "Port $script:API_PORT is occupied. Please stop the conflicting process first."
     }
     
-    Write-Host '  Launching FastAPI with uvicorn...' -ForegroundColor Cyan
-    
-    $uvicornCmd = "& '$script:VENV_PYTHON' -m uvicorn app.main:app --host 0.0.0.0 --port $script:API_PORT"
-    $process = Start-Process powershell -ArgumentList "-NoProfile", "-Command", $uvicornCmd -WindowStyle Normal -WorkingDirectory $script:BACKEND_DIR -PassThru
-    
-    $script:BackendProcessId = $process.Id
-    Write-Host "  Backend wrapper started (PID: $script:BackendProcessId)" -ForegroundColor Green
-    
-    # Wait briefly and find actual Python process
-    Write-Host '  Locating actual Python process...' -ForegroundColor Cyan
-    Start-Sleep -Milliseconds 1500
-    
-    $actualPid = Get-ProcessOwningPort -Port $script:API_PORT
-    if ($actualPid) {
-        $script:BackendProcessId = $actualPid
-        Write-Host "  Tracked actual Python process (PID: $actualPid)" -ForegroundColor Green
-    } else {
-        Write-Host "  Warning: Could not find Python process, using wrapper PID" -ForegroundColor Yellow
+    if (-not $actualPid) {
+        Write-Step 'Backend did not bind to port' 'FAIL'
+        throw 'Backend startup failed - process did not bind to port'
     }
     
-    Write-Host '  Waiting for backend to be ready...' -ForegroundColor Cyan
+    # Wait for backend API to be ready
+    Write-Step 'Waiting for backend API to be ready' 'INFO'
+    
     $ready = $false
     $mqttConnected = $false
     
-    for ($i = 1; $i -le 30; $i++) {
+    for ($i = 1; $i -le 15; $i++) {
         Start-Sleep -Seconds 1
+        
         try {
             $response = Invoke-WebRequest -Uri "http://localhost:$script:API_PORT/api/health" -UseBasicParsing -TimeoutSec 2 -ErrorAction SilentlyContinue
             if ($response.StatusCode -eq 200) {
@@ -233,166 +288,185 @@ function Start-BackendService {
                 }
             }
         } catch {
-            # Still starting up
+            # Still starting
         }
     }
     
     if ($ready) {
-        Write-Host "  Backend ready on port $script:API_PORT" -ForegroundColor Green
-        Write-Host "  API: http://localhost:$script:API_PORT" -ForegroundColor Cyan
-        Write-Host "  Docs: http://localhost:$script:API_PORT/docs" -ForegroundColor Cyan
+        Write-Step 'Backend API is ready' 'OK' "http://localhost:$script:API_PORT"
+        Write-Step 'API Documentation' 'OK' "http://localhost:$script:API_PORT/docs"
         
         if ($mqttConnected) {
-            Write-Host "  MQTT Status: CONNECTED to $script:MQTT_BROKER" -ForegroundColor Green
+            Write-Step 'MQTT is connected' 'OK'
         } else {
-            Write-Host "  MQTT Status: CONNECTING... (may take a moment)" -ForegroundColor Yellow
+            Write-Step 'MQTT is NOT connected' 'WARN' 'This may prevent gateway from working. Check backend logs.'
         }
     } else {
-        Write-Host '  WARNING: Backend may still be starting' -ForegroundColor Yellow
-        Write-Host '  Check http://localhost:8000/api/health for status' -ForegroundColor Yellow
+        Write-Step 'Backend API not responding' 'WARN' 'Backend process is running but API not ready'
     }
     
     Write-Host ''
 }
 
 function Start-SerialGateway {
-    Write-Host 'Starting Serial-to-MQTT Gateway...' -ForegroundColor Cyan
+    Write-Step 'Starting Serial-to-MQTT Gateway' 'INFO'
     
-    # Check if gateway is already running
-    $existingGateway = Get-Process -Name python -ErrorAction SilentlyContinue | Where-Object {
-        $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
-        $cmdLine -like '*serial_gateway.py*'
+    # Check for already running gateway
+    $pythonProcs = Get-Process -Name python -ErrorAction SilentlyContinue
+    $existingGateway = $null
+    
+    foreach ($proc in $pythonProcs) {
+        if (Test-IsAquaBuzzProcess -ProcessId $proc.Id -ServiceType 'gateway') {
+            $existingGateway = $proc
+            break
+        }
     }
     
     if ($existingGateway) {
-        Write-Host "  Serial Gateway already running (PID: $($existingGateway.Id))" -ForegroundColor Yellow
+        Write-Step 'Serial Gateway already running - reusing' 'OK' "PID: $($existingGateway.Id)"
         $script:GatewayProcessId = $existingGateway.Id
         Write-Host ''
         return
     }
     
-    Write-Host '  Launching serial gateway...' -ForegroundColor Cyan
-    
+    # Verify script exists
     $gatewayScript = Join-Path $script:BACKEND_DIR 'serial_gateway.py'
-    
-    # Check if script exists
     if (-not (Test-Path $gatewayScript)) {
-        Write-Host '  WARNING: Serial gateway script not found' -ForegroundColor Yellow
-        Write-Host "  Expected: $gatewayScript" -ForegroundColor Gray
-        Write-Host '  Skipping gateway startup' -ForegroundColor Yellow
+        Write-Step 'Serial gateway script not found' 'FAIL' $gatewayScript
+        Write-Step 'Skipping gateway startup' 'WARN'
         Write-Host ''
         return
     }
     
-    $gatewayCmd = "& '$script:VENV_PYTHON' '$gatewayScript'"
-    $process = Start-Process powershell -ArgumentList "-NoProfile", "-Command", $gatewayCmd -WindowStyle Normal -WorkingDirectory $script:BACKEND_DIR -PassThru
+    # Start gateway
+    Write-Step 'Launching serial gateway' 'INFO'
     
-    $script:GatewayProcessId = $process.Id
-    Write-Host "  Gateway wrapper started (PID: $script:GatewayProcessId)" -ForegroundColor Green
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $script:VENV_PYTHON
+    $startInfo.Arguments = "`"$gatewayScript`""
+    $startInfo.WorkingDirectory = $script:BACKEND_DIR
+    $startInfo.UseShellExecute = $true
+    $startInfo.WindowStyle = 'Normal'
     
-    # Wait briefly and find actual Python process
-    Write-Host '  Locating actual Python process...' -ForegroundColor Cyan
-    Start-Sleep -Milliseconds 1500
+    $process = [System.Diagnostics.Process]::Start($startInfo)
     
+    # Wait briefly for process to stabilize
+    Start-Sleep -Milliseconds 1000
+    
+    # Find the actual Python process
+    $actualGateway = $null
     $pythonProcs = Get-Process -Name python -ErrorAction SilentlyContinue
-    $actualPid = $null
+    
     foreach ($proc in $pythonProcs) {
-        $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)" -ErrorAction SilentlyContinue).CommandLine
-        if ($cmdLine -like '*serial_gateway.py*') {
-            $actualPid = $proc.Id
-            break
-        }
-    }
-    
-    if ($actualPid) {
-        $script:GatewayProcessId = $actualPid
-        Write-Host "  Tracked actual Python process (PID: $actualPid)" -ForegroundColor Green
-    } else {
-        Write-Host "  Warning: Could not find Python process, using wrapper PID" -ForegroundColor Yellow
-    }
-    Write-Host '  Gateway will auto-detect ESP32 COM port' -ForegroundColor Cyan
-    Write-Host '  Connect ESP32 via USB to begin publishing events' -ForegroundColor Yellow
-    Write-Host '  Note: Gateway will wait for ESP32 connection' -ForegroundColor Gray
-    
-    Write-Host ''
-}
-
-function Start-DashboardService {
-    Write-Host 'Starting Dashboard HTTP Server...' -ForegroundColor Cyan
-    
-    $selectedPort = $null
-    $existingProcessId = $null
-    
-    # Check if any dashboard port is already in use
-    foreach ($port in $script:DASHBOARD_PORTS) {
-        $processId = Get-ProcessOwningPort -Port $port
-        if ($processId) {
-            Write-Host "  Port $port already in use by PID $processId" -ForegroundColor Yellow
-            
-            # Check if it's serving our dashboard
-            try {
-                $response = Invoke-WebRequest -Uri "http://localhost:$port" -UseBasicParsing -TimeoutSec 2 -ErrorAction SilentlyContinue
-                if ($response.StatusCode -eq 200 -and $response.Content -like '*AquaBuzz*') {
-                    Write-Host '  Existing dashboard server detected - reusing it' -ForegroundColor Green
-                    $script:DashboardProcessId = $processId
-                    $script:DashboardPort = $port
-                    Write-Host ''
-                    return
-                }
-            } catch {
-                # Port occupied but not responding or not our dashboard
-            }
-            
-            $selectedPort = $port
-            $existingProcessId = $processId
-            break
-        }
-    }
-    
-    # If port occupied by non-dashboard process, skip to next available
-    if ($existingProcessId -and -not $script:DashboardProcessId) {
-        Write-Host "  Port $selectedPort occupied by other service, trying next port..." -ForegroundColor Yellow
-        $selectedPort = $null
-    }
-    
-    # Find first available port
-    if (-not $selectedPort) {
-        foreach ($port in $script:DASHBOARD_PORTS) {
-            if (Test-PortAvailability -Port $port) {
-                $selectedPort = $port
+        if (Test-IsAquaBuzzProcess -ProcessId $proc.Id -ServiceType 'gateway') {
+            # Check if this process started recently
+            if ($proc.StartTime -gt (Get-Date).AddSeconds(-5)) {
+                $actualGateway = $proc
                 break
             }
         }
     }
     
+    if ($actualGateway) {
+        $script:GatewayProcessId = $actualGateway.Id
+        Write-Step "Gateway started (PID: $($actualGateway.Id))" 'OK'
+    } else {
+        $script:GatewayProcessId = $process.Id
+        Write-Step "Gateway wrapper started (PID: $($process.Id))" 'WARN' 'Could not verify actual Python process'
+    }
+    
+    Write-Step 'ESP32 auto-detection enabled' 'INFO' 'Connect ESP32 via USB'
+    Write-Step 'Gateway will publish heartbeats to MQTT' 'INFO'
+    
+    Write-Host ''
+}
+
+function Start-DashboardService {
+    Write-Step 'Starting Dashboard HTTP Server' 'INFO'
+    
+    # Check if dashboard already running on any port
+    foreach ($port in $script:DASHBOARD_PORTS) {
+        $existingPid = Get-ProcessOwningPort -Port $port
+        if ($existingPid) {
+            if (Test-IsAquaBuzzProcess -ProcessId $existingPid -ServiceType 'dashboard') {
+                # Verify it's serving our dashboard
+                try {
+                    $response = Invoke-WebRequest -Uri "http://localhost:$port" -UseBasicParsing -TimeoutSec 2 -ErrorAction SilentlyContinue
+                    if ($response.StatusCode -eq 200 -and $response.Content -like '*AquaBuzz*') {
+                        Write-Step 'Dashboard already running - reusing' 'OK' "Port: $port"
+                        $script:DashboardProcessId = $existingPid
+                        $script:DashboardPort = $port
+                        Write-Host ''
+                        return
+                    }
+                } catch {
+                    # Not our dashboard
+                }
+            }
+        }
+    }
+    
+    # Find available port
+    $selectedPort = $null
+    foreach ($port in $script:DASHBOARD_PORTS) {
+        $existingPid = Get-ProcessOwningPort -Port $port
+        if (-not $existingPid) {
+            $selectedPort = $port
+            break
+        }
+    }
+    
     if (-not $selectedPort) {
-        Write-Host '  ERROR: No available ports for dashboard' -ForegroundColor Red
-        Write-Host '  Tried ports: 3000, 3001, 3002, 8080, 8081' -ForegroundColor Gray
+        Write-Step 'No available ports for dashboard' 'FAIL' "Tried: $($script:DASHBOARD_PORTS -join ', ')"
         throw 'Dashboard port allocation failed'
     }
     
-    Write-Host "  Launching dashboard on port $selectedPort..." -ForegroundColor Cyan
-    
-    # Verify dashboard directory and index.html exist
+    # Verify dashboard files exist
     $indexPath = Join-Path $script:DASHBOARD_DIR 'index.html'
     if (-not (Test-Path $indexPath)) {
-        Write-Host '  ERROR: Dashboard index.html not found' -ForegroundColor Red
-        Write-Host "  Expected: $indexPath" -ForegroundColor Gray
-        throw 'Dashboard files not found'
+        Write-Step 'Dashboard files not found' 'FAIL' $indexPath
+        throw 'Dashboard HTML not found'
     }
     
-    $serverCmd = "& '$script:VENV_PYTHON' -m http.server $selectedPort"
-    $process = Start-Process powershell -ArgumentList "-NoProfile", "-Command", $serverCmd -WindowStyle Normal -WorkingDirectory $script:DASHBOARD_DIR -PassThru
+    # Start dashboard server
+    Write-Step "Launching dashboard on port $selectedPort" 'INFO'
     
-    $script:DashboardProcessId = $process.Id
-    $script:DashboardPort = $selectedPort
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $script:VENV_PYTHON
+    $startInfo.Arguments = "-m http.server $selectedPort"
+    $startInfo.WorkingDirectory = $script:DASHBOARD_DIR
+    $startInfo.UseShellExecute = $true
+    $startInfo.WindowStyle = 'Normal'
     
-    Write-Host "  Dashboard started (PID: $script:DashboardProcessId)" -ForegroundColor Green
+    $process = [System.Diagnostics.Process]::Start($startInfo)
     
-    Write-Host '  Waiting for dashboard to be ready...' -ForegroundColor Cyan
-    $ready = $false
+    # Wait for dashboard to bind to port
+    Write-Step 'Waiting for dashboard to bind to port' 'INFO'
+    
+    $actualPid = $null
     for ($i = 1; $i -le 10; $i++) {
+        Start-Sleep -Milliseconds 500
+        
+        $actualPid = Get-ProcessOwningPort -Port $selectedPort
+        if ($actualPid) {
+            Write-Step "Dashboard process found (PID: $actualPid)" 'OK'
+            $script:DashboardProcessId = $actualPid
+            $script:DashboardPort = $selectedPort
+            break
+        }
+    }
+    
+    if (-not $actualPid) {
+        Write-Step 'Dashboard did not bind to port' 'WARN'
+        $script:DashboardProcessId = $process.Id
+        $script:DashboardPort = $selectedPort
+    }
+    
+    # Verify dashboard is accessible
+    $ready = $false
+    for ($i = 1; $i -le 5; $i++) {
         Start-Sleep -Seconds 1
+        
         try {
             $response = Invoke-WebRequest -Uri "http://localhost:$selectedPort" -UseBasicParsing -TimeoutSec 2 -ErrorAction SilentlyContinue
             if ($response.StatusCode -eq 200) {
@@ -400,152 +474,116 @@ function Start-DashboardService {
                 break
             }
         } catch {
-            # Still starting up
+            # Still starting
         }
     }
     
     if ($ready) {
-        Write-Host "  Dashboard ready on port $selectedPort" -ForegroundColor Green
-        Write-Host "  URL: http://localhost:$selectedPort" -ForegroundColor Cyan
+        Write-Step 'Dashboard is ready' 'OK' "http://localhost:$selectedPort"
     } else {
-        Write-Host '  WARNING: Dashboard may still be starting' -ForegroundColor Yellow
-        Write-Host "  Check http://localhost:$selectedPort manually" -ForegroundColor Gray
+        Write-Step 'Dashboard may still be starting' 'WARN' "Check http://localhost:$selectedPort manually"
     }
     
     Write-Host ''
 }
 
-function Open-BrowserWindows {
-    Write-Host 'Opening browser windows...' -ForegroundColor Cyan
-    
+function Open-DashboardBrowser {
     if ($script:DashboardPort) {
+        Write-Step 'Opening dashboard in browser' 'INFO'
+        
         $url = "http://localhost:$script:DashboardPort"
         try {
             Start-Process $url
-            Write-Host "  Browser opened: $url" -ForegroundColor Green
+            Write-Step 'Browser opened' 'OK' $url
         } catch {
-            Write-Host "  Could not auto-open browser" -ForegroundColor Yellow
-            Write-Host "  Please open manually: $url" -ForegroundColor Gray
+            Write-Step 'Could not auto-open browser' 'WARN' "Please open manually: $url"
         }
-    } else {
-        Write-Host '  Dashboard not started, skipping browser launch' -ForegroundColor Yellow
     }
     
     Write-Host ''
 }
 
-function Save-ProcessInfo {
-    param(
-        [string]$Service,
-        [int]$ProcessId,
-        [int]$Port,
-        [string]$Url = ''
-    )
-    
-    $processes = @{}
-    if (Test-Path $script:PROCESS_TRACKER) {
-        try {
-            $content = Get-Content $script:PROCESS_TRACKER -Raw
-            $processes = $content | ConvertFrom-Json -AsHashtable
-        } catch {
-            $processes = @{}
-        }
-    }
-    
-    $processes[$Service] = @{
-        pid = $ProcessId
-        port = $Port
-        url = $Url
-        started_at = (Get-Date).ToString('o')
-    }
+# ============================================
+# MAIN EXECUTION
+# ============================================
+
+function Start-AquaBuzz {
+    Write-Section 'AQUABUZZ INTELLIGENT SYSTEM - RISE' 'Cyan'
+    Write-Host '  Automated Startup System' -ForegroundColor Gray
+    Write-Host '  USB Serial + Public MQTT' -ForegroundColor Gray
     
     try {
-        $json = $processes | ConvertTo-Json
-        Set-Content -Path $script:PROCESS_TRACKER -Value $json -Encoding UTF8
+        # Pre-flight checks
+        Test-ProjectRequirements
+        
+        # Start services
+        Start-BackendService
+        Start-SerialGateway
+        Start-DashboardService
+        
+        # Save process tracking
+        Save-ProcessTracker
+        
+        # Open browser
+        Open-DashboardBrowser
+        
+        # Success summary
+        Write-Section 'AQUABUZZ STARTUP COMPLETE' 'Green'
+        
+        Write-Host 'Services Running:' -ForegroundColor Cyan
+        Write-Host ''
+        
+        if ($script:BackendProcessId) {
+            Write-Host "  [OK] Backend API" -ForegroundColor Green
+            Write-Host "       http://localhost:$script:API_PORT" -ForegroundColor Gray
+            Write-Host "       PID: $script:BackendProcessId" -ForegroundColor Gray
+        } else {
+            Write-Host "  [FAIL] Backend API: NOT STARTED" -ForegroundColor Red
+        }
+        Write-Host ''
+        
+        if ($script:GatewayProcessId) {
+            Write-Host "  [OK] Serial Gateway" -ForegroundColor Green
+            Write-Host "       USB Serial to MQTT" -ForegroundColor Gray
+            Write-Host "       PID: $script:GatewayProcessId" -ForegroundColor Gray
+        } else {
+            Write-Host "  [WARN] Serial Gateway: NOT STARTED" -ForegroundColor Yellow
+        }
+        Write-Host ''
+        
+        if ($script:DashboardProcessId -and $script:DashboardPort) {
+            Write-Host "  [OK] Dashboard" -ForegroundColor Green
+            Write-Host "       http://localhost:$script:DashboardPort" -ForegroundColor Gray
+            Write-Host "       PID: $script:DashboardProcessId" -ForegroundColor Gray
+        } else {
+            Write-Host "  [FAIL] Dashboard: NOT STARTED" -ForegroundColor Red
+        }
+        Write-Host ''
+        
+        Write-Host 'Important Notes:' -ForegroundColor Yellow
+        Write-Host '  - If MQTT shows as NOT connected, check backend terminal for errors' -ForegroundColor White
+        Write-Host '  - Gateway requires MQTT to publish events' -ForegroundColor White
+        Write-Host '  - Connect ESP32 via USB for gateway to detect it' -ForegroundColor White
+        Write-Host ''
+        
+        Write-Host 'To stop all services:' -ForegroundColor Yellow
+        Write-Host '  rise-stop' -ForegroundColor White
+        Write-Host ''
+        
     } catch {
-        Write-Host "  Warning: Could not save process tracker" -ForegroundColor Yellow
+        Write-Section 'STARTUP FAILED' 'Red'
+        $errorMsg = $_.Exception.Message
+        Write-Host "Error: $errorMsg" -ForegroundColor Red
+        Write-Host ''
+        Write-Host 'Troubleshooting:' -ForegroundColor Yellow
+        Write-Host '  1. Run: rise-stop' -ForegroundColor White
+        Write-Host '  2. Check for port conflicts (8000, 3000)' -ForegroundColor White
+        Write-Host '  3. Verify Python virtual environment' -ForegroundColor White
+        Write-Host '  4. Try: rise again' -ForegroundColor White
+        Write-Host ''
+        exit 1
     }
 }
 
-# Main execution
-Write-Host ''
-Write-Host '==================================================' -ForegroundColor Cyan
-Write-Host '    AquaBuzz Intelligent System - RISE' -ForegroundColor Cyan
-Write-Host '    USB Serial Gateway + Public MQTT' -ForegroundColor Cyan
-Write-Host '==================================================' -ForegroundColor Cyan
-Write-Host ''
-
-try {
-    Test-ProjectRequirements
-    Test-InternetConnectivity
-    Start-BackendService
-    Start-SerialGateway
-    Start-DashboardService
-
-    # Save process tracking information
-    if ($script:BackendProcessId) {
-        Save-ProcessInfo -Service 'backend' -ProcessId $script:BackendProcessId -Port $script:API_PORT -Url "http://localhost:$script:API_PORT"
-    }
-    if ($script:GatewayProcessId) {
-        Save-ProcessInfo -Service 'gateway' -ProcessId $script:GatewayProcessId -Port 0 -Url 'USB Serial'
-    }
-    if ($script:DashboardProcessId -and $script:DashboardPort) {
-        Save-ProcessInfo -Service 'dashboard' -ProcessId $script:DashboardProcessId -Port $script:DashboardPort -Url "http://localhost:$script:DashboardPort"
-    }
-
-    Open-BrowserWindows
-
-    Write-Host ''
-    Write-Host '==================================================' -ForegroundColor Green
-    Write-Host '    AquaBuzz Startup Complete' -ForegroundColor Green
-    Write-Host '==================================================' -ForegroundColor Green
-    Write-Host ''
-    Write-Host 'Services Running:' -ForegroundColor Cyan
-    
-    if ($script:BackendProcessId) {
-        Write-Host "  Backend API: http://localhost:$script:API_PORT (PID: $script:BackendProcessId)" -ForegroundColor White
-    } else {
-        Write-Host "  Backend API: NOT STARTED" -ForegroundColor Red
-    }
-    
-    if ($script:GatewayProcessId) {
-        Write-Host "  Serial Gateway: USB Serial to MQTT (PID: $script:GatewayProcessId)" -ForegroundColor White
-    } else {
-        Write-Host "  Serial Gateway: NOT STARTED" -ForegroundColor Yellow
-    }
-    
-    if ($script:DashboardProcessId -and $script:DashboardPort) {
-        Write-Host "  Dashboard: http://localhost:$script:DashboardPort (PID: $script:DashboardProcessId)" -ForegroundColor White
-    } else {
-        Write-Host "  Dashboard: NOT STARTED" -ForegroundColor Red
-    }
-    
-    Write-Host "  MQTT Broker: $script:MQTT_BROKER:$script:MQTT_PORT (public)" -ForegroundColor White
-    Write-Host ''
-    Write-Host 'Architecture:' -ForegroundColor Yellow
-    Write-Host '  ESP32 -> USB Serial -> Gateway -> MQTT -> Backend -> Dashboard' -ForegroundColor White
-    Write-Host ''
-    Write-Host 'Network Independence:' -ForegroundColor Yellow
-    Write-Host '  [OK] No WiFi credentials needed on ESP32' -ForegroundColor White
-    Write-Host '  [OK] Works with any laptop WiFi connection' -ForegroundColor White
-    Write-Host '  [OK] Gateway reconnects automatically' -ForegroundColor White
-    Write-Host ''
-    Write-Host 'ESP32 Setup:' -ForegroundColor Yellow
-    Write-Host '  1. Upload aquabuzz_core.ino firmware' -ForegroundColor White
-    Write-Host '  2. Connect ESP32 via USB' -ForegroundColor White
-    Write-Host '  3. Gateway will auto-detect COM port' -ForegroundColor White
-    Write-Host ''
-    Write-Host 'To stop all services, run: rise-stop' -ForegroundColor Yellow
-    Write-Host ''
-} catch {
-    Write-Host ''
-    Write-Host 'ERROR: Startup failed' -ForegroundColor Red
-    Write-Host $_.Exception.Message -ForegroundColor Red
-    Write-Host ''
-    Write-Host 'Troubleshooting:' -ForegroundColor Yellow
-    Write-Host '  - Check if ports 8000 or 3000 are already in use' -ForegroundColor Gray
-    Write-Host '  - Verify Python virtual environment exists' -ForegroundColor Gray
-    Write-Host '  - Run rise-stop to clean up any stuck processes' -ForegroundColor Gray
-    Write-Host ''
-    exit 1
-}
+# Run the startup
+Start-AquaBuzz

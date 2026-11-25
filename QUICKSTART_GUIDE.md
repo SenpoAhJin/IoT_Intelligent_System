@@ -1,30 +1,72 @@
 # AQUABUZZ QUICKSTART GUIDE
 
-## SYSTEM STARTUP (3 COMMANDS)
+## ONE-COMMAND STARTUP ⚡
 
-### 1. Start Everything
+The entire AquaBuzz system now starts with a single command:
+
 ```powershell
+rise
+```
+
+That's it! No need to navigate to the project directory or run scripts manually.
+
+The `rise` command is registered in your PowerShell profile and works from any directory.
+
+### To Stop
+
+```powershell
+rise-stop
+```
+
+---
+
+## WHAT `rise` DOES
+
+When you run `rise`, the system automatically:
+
+1. **Validates** project structure and configuration
+2. **Starts Backend** (FastAPI + uvicorn on port 8000)
+3. **Starts Gateway** (Serial-to-MQTT bridge)
+4. **Starts Dashboard** (HTTP server on port 3000)
+5. **Verifies** all services are healthy
+6. **Opens** dashboard in your default browser
+
+### Idempotency
+
+Running `rise` multiple times is safe. It will:
+- **Reuse** healthy existing services
+- **Restart** only failed or missing services
+- **Never create** duplicate processes
+
+### Process Tracking
+
+Services are tracked in `.aquabuzz-processes.json` for clean shutdown.
+
+---
+
+## MANUAL STARTUP (Advanced)
+
+If you need manual control:
+
+```powershell
+# Navigate to project
 cd "C:\Users\Alord\OneDrive\Documents\School\COSC 105 - Ma'am Mikae\Intelligent_System_IS"
+
+# Run the script directly
 .\scripts\rise.ps1
+
+# Or individual services
+python -m uvicorn app.main:app --app-dir .\backend --port 8000
+python .\backend\serial_gateway.py
+python -m http.server 3000 --directory .\dashboard
 ```
 
-This starts:
-- FastAPI Backend (port 8000)
-- Serial Gateway (auto-detects ESP32)
-- Dashboard (port 3000-3002)
-- Opens browser automatically
-
-### 2. Stop Everything
-```powershell
-.\scripts\rise-stop.ps1
-```
-
-### 3. Check Status
+### Check Status
 ```powershell
 # View health endpoint
-curl http://localhost:8000/api/health
+Invoke-WebRequest http://localhost:8000/api/health | ConvertFrom-Json
 
-# Or open in browser
+# Or open API docs
 start http://localhost:8000/docs
 ```
 
